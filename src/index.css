@@ -34,6 +34,32 @@
     width: 0;
     height: 0;
   }
+
+  /* Keep dense operational screens readable and easy to operate with one hand. */
+  .text-\[9px\] {
+    font-size: 0.75rem;
+  }
+  .text-\[10px\],
+  .text-\[11px\] {
+    font-size: 0.8125rem;
+  }
+  .text-xs {
+    font-size: 0.875rem;
+    line-height: 1.35;
+  }
+  .text-sm {
+    font-size: 1rem;
+    line-height: 1.45;
+  }
+  button,
+  input,
+  select,
+  textarea {
+    min-height: 2.75rem;
+  }
+  button {
+    touch-action: manipulation;
+  }
 }
 
 /* Modern, ultra-slim scrollbars for containers that legitimately scroll (e.g. desktop tables, modal bodies) */
