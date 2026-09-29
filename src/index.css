@@ -62,6 +62,31 @@
   }
 }
 
+.workspace-tile {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.65rem;
+  border: 0;
+  border-radius: 1rem;
+  padding: 0.7rem 0.8rem;
+  text-align: left;
+  color: white;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+  transition: transform 160ms ease, box-shadow 160ms ease;
+  cursor: pointer;
+}
+.workspace-tile:hover { transform: translateY(-2px); box-shadow: 0 12px 24px rgba(15, 23, 42, 0.13); }
+.workspace-tile strong, .workspace-tile small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-tile strong { font-size: 0.78rem; font-weight: 800; }
+.workspace-tile small { margin-top: 0.15rem; font-size: 0.68rem; opacity: 0.72; }
+.workspace-icon { display: grid; flex: 0 0 auto; place-items: center; width: 2.2rem; height: 2.2rem; border-radius: 0.75rem; background: rgba(255,255,255,0.15); }
+.workspace-icon svg { width: 1.1rem; height: 1.1rem; }
+.workspace-tile-emerald { background: #14532d; }
+.workspace-tile-violet { background: #3b245c; }
+.workspace-tile-blue { background: #14527a; }
+.workspace-tile-rose { background: #7f2630; }
+
 /* Modern, ultra-slim scrollbars for containers that legitimately scroll (e.g. desktop tables, modal bodies) */
 ::-webkit-scrollbar {
   width: 5px;

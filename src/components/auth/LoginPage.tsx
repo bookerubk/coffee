@@ -46,7 +46,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
     }
 
     const employees = StorageManager.getEmployees();
-    const employee = employees.find((item) => item.email?.toLowerCase() === email.trim().toLowerCase());
+    const employee = employees.find((item) => (item as typeof item & { email?: string }).email?.toLowerCase() === email.trim().toLowerCase());
     const session: UserSession = {
       id: employee?.id || `user-${Date.now()}`,
       name: employee?.name || name.trim() || email.trim().split('@')[0],

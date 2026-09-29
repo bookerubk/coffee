@@ -153,7 +153,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-stone-100 flex flex-col text-stone-900 font-sans selection:bg-amber-200">
+    <div className="min-h-screen bg-[#f4f5f2] flex flex-col text-slate-900 font-sans selection:bg-emerald-200">
       {/* Main Header with Role & Point switchers */}
       <Header
         currentRole={currentRole}

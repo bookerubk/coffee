@@ -214,8 +214,30 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
+      {/* Visual workspace shortcuts */}
+      <div className="border-t border-slate-100 bg-[#f7f8f6] px-4 py-3">
+        <div className="mx-auto grid max-w-7xl grid-cols-2 gap-2 overflow-x-auto sm:flex sm:gap-3">
+          <button onClick={() => onSubViewChange(currentRole === 'admin' ? 'legal_entities' : currentRole === 'production_operator' ? 'summary' : currentRole === 'driver' ? 'deliveries' : 'order')} className="workspace-tile workspace-tile-emerald">
+            <span className="workspace-icon"><Layers aria-hidden="true" /></span>
+            <span><strong>Рабочая область</strong><small>Текущие задачи</small></span>
+          </button>
+          <button onClick={() => onSubViewChange(currentRole === 'driver' ? 'deliveries' : currentRole === 'production_operator' ? 'waybills' : currentRole === 'admin' ? 'directories' : 'deliveries')} className="workspace-tile workspace-tile-violet">
+            <span className="workspace-icon"><Truck aria-hidden="true" /></span>
+            <span><strong>Операции</strong><small>Заказы и отгрузка</small></span>
+          </button>
+          <button onClick={() => onSubViewChange(currentRole === 'admin' ? 'discrepancies' : currentRole === 'production_operator' ? 'waybills' : 'deliveries')} className="workspace-tile workspace-tile-blue">
+            <span className="workspace-icon"><FileSpreadsheet aria-hidden="true" /></span>
+            <span><strong>Документы</strong><small>Проверка данных</small></span>
+          </button>
+          <button onClick={() => onSubViewChange(currentRole === 'admin' ? 'legal_entities' : 'order')} className="workspace-tile workspace-tile-rose">
+            <span className="workspace-icon"><Database aria-hidden="true" /></span>
+            <span><strong>Справочники</strong><small>Единый каталог</small></span>
+          </button>
+        </div>
+      </div>
+
       {/* Role Sub-Navigation Bar */}
-      <div className="bg-stone-50 border-t border-stone-200 px-4 py-2">
+      <div className="bg-white border-t border-slate-100 px-4 py-2">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           {/* Sub tabs per role */}
           <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1 sm:pb-0 max-w-full">
