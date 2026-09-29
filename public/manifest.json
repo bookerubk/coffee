@@ -1,0 +1,16 @@
+{
+  "name": "Кофейня → Производство",
+  "short_name": "Кофейня-Заказ",
+  "description": "Сквозной заказ кофеен, сводный заказ производства и приёмка с расхождениями",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1c1917",
+  "theme_color": "#78350f",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml"
+    }
+  ]
+}

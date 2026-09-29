@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Кофейня → Производство</title>
+    <meta name="description" content="Веб-инструмент сети кофеен: сквозной заказ, сводные накладные производства, факт отгрузки и фиксация расхождений." />
+    <meta property="og:title" content="Кофейня → Производство" />
+    <meta property="og:description" content="Веб-инструмент сети кофеен: сквозной заказ, сводные накладные производства, факт отгрузки и фиксация расхождений." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" content="#78350f" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <script>
+      // Suppress benign WebSocket connection warnings from dev environment/iframe
+      window.addEventListener('unhandledrejection', function (e) {
+        var reason = e && e.reason;
+        var msg = (reason && (reason.message || reason.toString())) || '';
+        if (msg.indexOf('WebSocket') !== -1 || msg.indexOf('websocket') !== -1) {
+          e.preventDefault();
+        }
+      });
+    </script>
+  </head>
+  <body class="bg-stone-100 text-stone-900 antialiased selection:bg-amber-200">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+/* Universal mobile-friendly layout and scrollbar reset */
+@layer base {
+  html, body {
+    overflow-x: hidden;
+    max-width: 100vw;
+    width: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* Custom utility to completely hide scrollbars while allowing touch/swipe/wheel scrolling */
+.no-scrollbar {
+  -ms-overflow-style: none !important; /* IE and Edge */
+  scrollbar-width: none !important; /* Firefox */
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none !important; /* Chrome, Safari, Opera */
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* On mobile devices (screen width <= 768px), horizontal scrollbars on tabs, filter bars, and chips
+   should NEVER render visible grey scrollbars, giving a clean native-app swipe experience */
+@media (max-width: 768px) {
+  .overflow-x-auto {
+    -webkit-overflow-scrolling: touch;
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .overflow-x-auto::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+}
+
+/* Modern, ultra-slim scrollbars for containers that legitimately scroll (e.g. desktop tables, modal bodies) */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(168, 162, 158, 0.45); /* subtle stone-400 */
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(120, 113, 108, 0.7);
+}
+
+/* Prevent double scrollbars when modal is active */
+body.modal-open {
+  overflow: hidden !important;
+  touch-action: none;
+}

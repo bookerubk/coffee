@@ -1,0 +1,6 @@
+{
+  "name": "Кофейня → Производство",
+  "description": "Веб-инструмент сети кофеен: сквозной заказ, сводные накладные производства, факт отгрузки и фиксация расхождений.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
