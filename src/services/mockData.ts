@@ -390,11 +390,12 @@ export const INITIAL_EMPLOYEES: Employee[] = [
     archived: false,
   },
   {
-    id: 'emp-5',
-    name: 'Ольга Лебедева',
-    role: 'admin',
-    phone: '+7 (999) 567-89-01',
-    archived: false,
+  id: 'emp-5',
+  name: 'Ольга Лебедева',
+  role: 'admin',
+  email: 'admin@aroma-coffee.ru',
+  phone: '+7 (999) 567-89-01',
+  archived: false,
   },
 ];
 
