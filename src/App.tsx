@@ -3,7 +3,6 @@ import { UserRole, SlotId, CoffeePoint, UserSession } from './types';
 import { StorageManager } from './services/storage';
 import { ApiService } from './services/api';
 import { Header } from './components/Header';
-import { DevSimulationBar } from './components/DevSimulationBar';
 import { LoginPage } from './components/auth/LoginPage';
 import { OrderCreationView } from './components/supervisor/OrderCreationView';
 import { SupervisorDeliveriesView } from './components/supervisor/SupervisorDeliveriesView';
@@ -155,9 +154,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-stone-100 flex flex-col text-stone-900 font-sans selection:bg-amber-200">
-      {/* Simulation / Verification Toolbar */}
-      <DevSimulationBar />
-
       {/* Main Header with Role & Point switchers */}
       <Header
         currentRole={currentRole}
