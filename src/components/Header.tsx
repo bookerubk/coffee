@@ -134,7 +134,7 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Role Selector Tabs (Visible only for Administrator for rapid testing & oversight) */}
           {isAdmin && (
-            <div className="grid shrink-0 grid-cols-4 items-center gap-1 rounded-xl bg-stone-100 p-1">
+            <div className="flex min-w-0 max-w-full items-center gap-1 overflow-x-auto rounded-xl bg-stone-100 p-1 no-scrollbar">
               <button
                 onClick={() => {
                   onRoleChange('admin');
