@@ -593,12 +593,14 @@ async function startServer() {
   // preview and Vercel process healthy before YDB/SQL variables are added.
   const databaseConfigured = Boolean(process.env.YDB_ENDPOINT && process.env.YDB_DATABASE);
   if (databaseConfigured) {
-    if (process.env.YDB_ENDPOINT && process.env.YDB_DATABASE) {
+    if (process.env.YDB_AUTO_SCHEMA === 'true') {
       ensureYdbSchema().catch((err) => console.error('YDB schema initialization error:', err));
     }
-    seedDatabaseIfEmpty().catch((err) => {
-      console.error('Initial seed error:', err);
-    });
+    if (process.env.YDB_AUTO_SEED === 'true') {
+      seedDatabaseIfEmpty().catch((err) => {
+        console.error('Initial seed error:', err);
+      });
+    }
   } else {
     console.warn('Database is not configured; starting without automatic seeding.');
   }
