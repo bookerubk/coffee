@@ -2,12 +2,10 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import * as schema from './schema.ts';
 
-// Add global connection pool caching to persist across hot-reloads
 declare global {
   var _postgresPool: Pool | undefined;
 }
 
-// Function to create or retrieve the connection pool (Object Method)
 export const createPool = () => {
   if (!global._postgresPool) {
     global._postgresPool = new Pool({
@@ -21,7 +19,6 @@ export const createPool = () => {
       statement_timeout: 30000,
     });
 
-    // Prevent unhandled pool-level errors from crashing the application
     global._postgresPool.on('error', (err) => {
       console.error('Unexpected error on idle SQL pool client:', err);
     });
@@ -29,8 +26,14 @@ export const createPool = () => {
   return global._postgresPool;
 };
 
-// Create or retrieve the pool instance lazily.
 const pool = createPool();
-
-// Initialize Drizzle with the pool and schema.
 export const db = drizzle(pool, { schema });
+
+export async function checkDatabaseConnection() {
+  await pool.query('SELECT 1');
+  return true;
+}
+
+export async function closeDatabaseConnection() {
+  await pool.end();
+}
