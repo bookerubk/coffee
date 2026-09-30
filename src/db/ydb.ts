@@ -64,15 +64,25 @@ export async function ensureYdbTable(table: string, columns: string[]) {
   await executeYql(`CREATE TABLE IF NOT EXISTS \`${table}\` (${columns.join(', ')}, PRIMARY KEY (id));`);
 }
 
+function yqlLiteral(value: unknown) {
+  if (value === null || value === undefined) return 'NULL';
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return `'${String(value instanceof Date ? value.toISOString() : value).replace(/'/g, "''")}'`;
+}
+
 export async function upsertYdbRow(table: string, row: Record<string, unknown>) {
   const entries = Object.entries(row).filter(([, value]) => value !== undefined);
   const columns = entries.map(([key]) => key);
-  const values = entries.map(([, value]) => JSON.stringify(value == null ? '' : String(value instanceof Date ? value.toISOString() : value)));
+  const values = entries.map(([, value]) => yqlLiteral(value));
   await executeYql(`UPSERT INTO \`${table}\` (${columns.join(', ')}) VALUES (${values.join(', ')});`);
 }
 
-export async function selectYdbRows(table: string, accountId?: string) {
-  const where = accountId ? ` WHERE account_id = '${accountId.replace(/'/g, "''")}'` : '';
+export async function selectYdbRows(table: string, filters: Record<string, unknown> = {}) {
+  const entries = Object.entries(filters).filter(([, value]) => value !== undefined);
+  const where = entries.length > 0
+    ? ` WHERE ${entries.map(([column, value]) => `${column} = ${yqlLiteral(value)}`).join(' AND ')}`
+    : '';
   return executeYql<Record<string, unknown>>(`SELECT * FROM \`${table}\`${where};`);
 }
 
