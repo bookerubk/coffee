@@ -13,7 +13,6 @@ import { SavingOverlayModal } from './SavingOverlayModal';
 import {
   Plus,
   Minus,
-  RotateCcw,
   Clock,
   AlertCircle,
   Save,
@@ -42,6 +41,7 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [selectedCategory, setSelectedCategory] = useState<string>('Все');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [isCatalogOpen, setIsCatalogOpen] = useState(false);
 
   // Critical Section 4.2 State Machine
   const [saveState, setSaveState] = useState<SaveState>('IDLE');
@@ -543,139 +543,77 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
           </div>
         </div>
 
-        {/* Quick Toolbar: Repeat Last Order & Autosave Indicator */}
-        <div className="flex flex-wrap items-center justify-between gap-3 pt-1 border-t border-stone-100">
+        {lastAutoSavedAt && (
+          <p className="border-t border-stone-100 pt-3 text-sm text-stone-500">
+            Черновик автосохранён в {lastAutoSavedAt}
+          </p>
+        )}
+      </div>
+
+      <section className="space-y-3" aria-labelledby="order-items-heading">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h3 id="order-items-heading" className="text-lg font-bold text-stone-900">Номенклатура заказа</h3>
+            <p className="text-sm text-stone-500">Добавьте только нужные позиции, чтобы сформировать заявку.</p>
+          </div>
           <button
             type="button"
+            onClick={() => setIsCatalogOpen(true)}
             disabled={isDeadlinePassed || saveState !== 'IDLE'}
-            onClick={handleRepeatPreviousOrder}
-            className="flex items-center gap-2 px-3 py-1.5 bg-stone-100 hover:bg-stone-200 active:bg-stone-300 disabled:opacity-50 disabled:pointer-events-none text-stone-800 text-xs font-medium rounded-lg transition-colors cursor-pointer"
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-700 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-amber-800 disabled:pointer-events-none disabled:opacity-40"
           >
-            <RotateCcw className="w-3.5 h-3.5 text-stone-600" />
-            <span>Повторить прошлый заказ</span>
+            <Plus className="w-4 h-4" />
+            Добавить номенклатуру
           </button>
-
-          <div className="flex items-center gap-3 text-xs text-stone-500">
-            {lastAutoSavedAt && (
-              <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                <span>Черновик автосохранён в {lastAutoSavedAt}</span>
-              </div>
-            )}
-            <span className="text-stone-300">|</span>
-            <span className="font-mono text-[11px] text-stone-400">Ключ: {idempotencyKey.slice(0, 10)}…</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Catalog Filtering & Search */}
-      <div className="space-y-3">
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-          {/* Category Tabs */}
-          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1 max-w-full">
-            {categories.map((cat) => (
-              <button
-                key={cat}
-                onClick={() => setSelectedCategory(cat)}
-                className={`shrink-0 whitespace-nowrap px-3 py-1.5 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
-                  selectedCategory === cat
-                    ? 'bg-amber-800 text-white shadow-sm'
-                    : 'bg-white text-stone-600 border border-stone-200 hover:bg-stone-50'
-                }`}
-              >
-                {cat}
-              </button>
-            ))}
-          </div>
-
-          {/* Search Box */}
-          <div className="relative w-full sm:w-64 shrink-0">
-            <Search className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              placeholder="Поиск по названию или SKU..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-3 py-1.5 bg-white border border-stone-200 rounded-lg text-xs placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-600 focus:border-transparent"
-            />
-          </div>
         </div>
 
-        {/* Catalog Items Grid (Card with Stepper + / - per Section 4.1) */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {filteredProducts.map((product) => {
-            const qty = quantities[product.id] || 0;
-            const isSelected = qty > 0;
-
-            return (
-              <div
-                key={product.id}
-                className={`p-4 rounded-xl border transition-all flex flex-col justify-between ${
-                  isSelected
-                    ? 'bg-amber-50/50 border-amber-300 shadow-sm'
-                    : 'bg-white border-stone-200 hover:border-stone-300'
-                } ${isDeadlinePassed ? 'opacity-70' : ''}`}
-              >
-                <div>
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="text-[11px] font-mono font-medium text-stone-400 uppercase">
-                      {product.sku}
-                    </span>
-                    <span className="text-[11px] px-2 py-0.5 bg-stone-100 text-stone-600 rounded-md font-medium">
-                      {product.unit}
-                    </span>
+        {totalPositions === 0 ? (
+          <div className="rounded-2xl border border-dashed border-stone-300 bg-white px-5 py-10 text-center text-sm text-stone-500">
+            В заказе пока нет позиций. Нажмите «Добавить номенклатуру».
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {products.filter((product) => (quantities[product.id] || 0) > 0).map((product) => {
+              const qty = quantities[product.id] || 0;
+              return (
+                <div key={product.id} className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50/60 p-4">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-stone-900 truncate">{product.name}</p>
+                    <p className="mt-1 text-xs text-stone-500">{product.sku} · {product.unit}</p>
                   </div>
-                  <h3 className="font-semibold text-stone-900 text-sm mt-1 leading-snug">
-                    {product.name}
-                  </h3>
-                  <p className="text-[11px] text-stone-500 mt-0.5">{product.category}</p>
-                </div>
-
-                {/* Stepper (+ / -) Section 4.1: Strictly no dropdowns, whole non-negative integers */}
-                <div className="mt-4 pt-3 border-t border-stone-100 flex items-center justify-between">
-                  <span className="text-xs text-stone-500 font-medium">Заказ:</span>
-
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      disabled={isDeadlinePassed || qty <= 0 || saveState !== 'IDLE'}
-                      onClick={() => handleQuantityChange(product.id, -1)}
-                      className="w-8 h-8 rounded-lg bg-stone-100 hover:bg-stone-200 active:bg-stone-300 disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center text-stone-700 transition-colors cursor-pointer"
-                      title="Уменьшить на 1"
-                    >
-                      <Minus className="w-3.5 h-3.5" />
-                    </button>
-
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                      disabled={isDeadlinePassed || saveState !== 'IDLE'}
-                      value={qty}
-                      onChange={(e) => handleDirectInput(product.id, e.target.value)}
-                      className={`w-14 h-8 text-center font-bold text-sm rounded-lg border focus:outline-none focus:ring-2 focus:ring-amber-600 ${
-                        isSelected
-                          ? 'border-amber-400 bg-white text-amber-950 ring-1 ring-amber-300'
-                          : 'border-stone-200 bg-stone-50 text-stone-700'
-                      }`}
-                    />
-
-                    <button
-                      type="button"
-                      disabled={isDeadlinePassed || saveState !== 'IDLE'}
-                      onClick={() => handleQuantityChange(product.id, 1)}
-                      className="w-8 h-8 rounded-lg bg-amber-600 hover:bg-amber-700 active:bg-amber-800 disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center text-white transition-colors cursor-pointer"
-                      title="Увеличить на 1"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                    </button>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button type="button" onClick={() => handleQuantityChange(product.id, -1)} className="flex size-9 items-center justify-center rounded-lg bg-white text-stone-700 shadow-sm" aria-label={`Уменьшить ${product.name}`}><Minus className="w-4 h-4" /></button>
+                    <span className="min-w-10 text-center text-base font-bold text-amber-950">{qty}</span>
+                    <button type="button" onClick={() => handleQuantityChange(product.id, 1)} className="flex size-9 items-center justify-center rounded-lg bg-amber-600 text-white shadow-sm" aria-label={`Увеличить ${product.name}`}><Plus className="w-4 h-4" /></button>
                   </div>
                 </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {isCatalogOpen && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-stone-950/45 p-0 sm:p-6" role="dialog" aria-modal="true" aria-labelledby="catalog-title">
+          <div className="flex max-h-[90vh] w-full max-w-3xl flex-col rounded-t-2xl bg-stone-50 shadow-2xl sm:rounded-2xl">
+            <div className="flex items-center justify-between border-b border-stone-200 bg-white px-5 py-4">
+              <div><h2 id="catalog-title" className="text-lg font-bold text-stone-900">Выберите номенклатуру</h2><p className="text-sm text-stone-500">Количество можно изменить после добавления.</p></div>
+              <button type="button" onClick={() => setIsCatalogOpen(false)} className="rounded-lg px-3 py-2 text-sm font-medium text-stone-600 hover:bg-stone-100">Закрыть</button>
+            </div>
+            <div className="space-y-4 overflow-y-auto p-4 sm:p-5">
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {categories.map((cat) => <button key={cat} type="button" onClick={() => setSelectedCategory(cat)} className={`shrink-0 rounded-lg px-3 py-2 text-sm font-medium ${selectedCategory === cat ? 'bg-amber-800 text-white' : 'bg-white text-stone-600 border border-stone-200'}`}>{cat}</button>)}
+                </div>
+                <div className="relative shrink-0 sm:w-64"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" /><input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Поиск по названию или SKU" className="w-full rounded-lg border border-stone-200 bg-white py-2.5 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-amber-600" /></div>
               </div>
-            );
-          })}
+              <div className="grid gap-2 sm:grid-cols-2">
+                {filteredProducts.map((product) => <button key={product.id} type="button" onClick={() => { if (!(quantities[product.id] || 0)) handleQuantityChange(product.id, 1); }} className={`flex items-center justify-between gap-3 rounded-xl border p-4 text-left transition-colors ${quantities[product.id] ? 'border-amber-300 bg-amber-50' : 'border-stone-200 bg-white hover:border-amber-300'}`}><span><span className="block font-semibold text-stone-900">{product.name}</span><span className="mt-1 block text-xs text-stone-500">{product.sku} · {product.unit}</span></span><span className="text-sm font-bold text-amber-800">{quantities[product.id] ? 'Добавлено' : 'Добавить'}</span></button>)}
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Sticky Bottom Order Summary & Submission Bar */}
       <div className="fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-md border-t border-stone-200 shadow-lg px-4 py-3">

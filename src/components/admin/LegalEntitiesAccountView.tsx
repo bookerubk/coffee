@@ -656,13 +656,13 @@ Email: ${entity.email}
             {activeAccountTab === 'overview' && (
               <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* General & Legal Details */}
-                <div className="bg-stone-50 p-5 rounded-2xl border border-stone-200 space-y-3">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-stone-700 flex items-center gap-2">
-                    <Building2 className="w-4 h-4 text-amber-800" />
-                    Юридические реквизиты и адреса
-                  </h4>
+                <details className="group bg-stone-50 p-5 rounded-2xl border border-stone-200">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-xs font-bold uppercase tracking-wider text-stone-700">
+                    <span className="flex items-center gap-2"><Building2 className="w-4 h-4 text-amber-800" />Юридические реквизиты и адреса</span>
+                    <span className="text-stone-400 transition-transform group-open:rotate-180">⌄</span>
+                  </summary>
 
-                  <div className="space-y-2 text-xs">
+                  <div className="mt-4 space-y-2 text-xs">
                     <div>
                       <span className="text-stone-400 block text-[10px]">Полное наименование:</span>
                       <span className="font-semibold text-stone-900">{selectedEntity.name}</span>
@@ -700,16 +700,16 @@ Email: ${entity.email}
                       <span className="text-stone-800">{selectedEntity.actualAddress || selectedEntity.legalAddress}</span>
                     </div>
                   </div>
-                </div>
+                </details>
 
                 {/* Bank Details & Contacts */}
-                <div className="bg-stone-50 p-5 rounded-2xl border border-stone-200 space-y-3">
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-stone-700 flex items-center gap-2">
-                    <CreditCard className="w-4 h-4 text-amber-800" />
-                    Банковские счета и контакты
-                  </h4>
+                <details className="group bg-stone-50 p-5 rounded-2xl border border-stone-200">
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-xs font-bold uppercase tracking-wider text-stone-700">
+                    <span className="flex items-center gap-2"><CreditCard className="w-4 h-4 text-amber-800" />Банковские счета и контакты</span>
+                    <span className="text-stone-400 transition-transform group-open:rotate-180">⌄</span>
+                  </summary>
 
-                  <div className="space-y-2 text-xs">
+                  <div className="mt-4 space-y-2 text-xs">
                     <div>
                       <span className="text-stone-400 block text-[10px]">Банк:</span>
                       <span className="font-semibold text-stone-900">{selectedEntity.bankName || 'Не указан'}</span>
@@ -751,7 +751,7 @@ Email: ${entity.email}
                       </span>
                     </div>
                   </div>
-                </div>
+                </details>
               </div>
             )}
 

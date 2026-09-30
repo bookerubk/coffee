@@ -62,6 +62,38 @@
   }
 }
 
+.workspace-tile {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 1rem;
+  padding: 0.85rem 0.9rem;
+  text-align: left;
+  color: white;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+  transition: transform 160ms ease, box-shadow 160ms ease;
+  cursor: pointer;
+}
+.workspace-tile:hover { transform: translateY(-2px); box-shadow: 0 12px 24px rgba(15, 23, 42, 0.13); }
+.workspace-tile strong, .workspace-tile small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-tile strong { font-size: 0.875rem; font-weight: 800; }
+.workspace-tile small { margin-top: 0.2rem; font-size: 0.75rem; opacity: 0.78; }
+.workspace-icon { display: grid; flex: 0 0 auto; place-items: center; width: 2.6rem; height: 2.6rem; border-radius: 0.85rem; background: rgba(255,255,255,0.16); }
+.workspace-icon svg { width: 1.35rem; height: 1.35rem; }
+.workspace-tile-emerald { background: #166534; }
+.workspace-tile-violet { background: #4c1d95; }
+.workspace-tile-blue { background: #075985; }
+.workspace-tile-rose { background: #9f1239; }
+
+@media (max-width: 640px) {
+  .workspace-tile { padding: 0.8rem; }
+  .workspace-tile strong { font-size: 0.8125rem; }
+  .workspace-tile small { font-size: 0.6875rem; }
+  .workspace-icon { width: 2.35rem; height: 2.35rem; }
+}
+
 /* Modern, ultra-slim scrollbars for containers that legitimately scroll (e.g. desktop tables, modal bodies) */
 ::-webkit-scrollbar {
   width: 5px;
