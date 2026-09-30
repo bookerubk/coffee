@@ -115,25 +115,72 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Visual workspace shortcuts */}
+      {/* Role-specific quick actions: global navigation stays in the role tabs below. */}
       <div className="border-t border-slate-100 bg-[#f7f8f6] px-4 py-3">
-        <div className="mx-auto grid max-w-7xl grid-cols-2 gap-2 overflow-x-auto sm:flex sm:gap-3">
-          <button onClick={() => onSubViewChange(currentRole === 'admin' ? 'legal_entities' : currentRole === 'production_operator' ? 'summary' : currentRole === 'driver' ? 'deliveries' : 'order')} className="workspace-tile workspace-tile-emerald">
-            <span className="workspace-icon"><Layers aria-hidden="true" /></span>
-            <span><strong>Рабочая область</strong><small>Текущие задачи</small></span>
-          </button>
-          <button onClick={() => onSubViewChange(currentRole === 'driver' ? 'deliveries' : currentRole === 'production_operator' ? 'waybills' : currentRole === 'admin' ? 'directories' : 'deliveries')} className="workspace-tile workspace-tile-violet">
-            <span className="workspace-icon"><Truck aria-hidden="true" /></span>
-            <span><strong>Операции</strong><small>Заказы и отгрузка</small></span>
-          </button>
-          <button onClick={() => onSubViewChange(currentRole === 'admin' ? 'discrepancies' : currentRole === 'production_operator' ? 'waybills' : 'deliveries')} className="workspace-tile workspace-tile-blue">
-            <span className="workspace-icon"><FileSpreadsheet aria-hidden="true" /></span>
-            <span><strong>Документы</strong><small>Проверка данных</small></span>
-          </button>
-          <button onClick={() => onSubViewChange(currentRole === 'admin' ? 'legal_entities' : 'order')} className="workspace-tile workspace-tile-rose">
-            <span className="workspace-icon"><Database aria-hidden="true" /></span>
-            <span><strong>Справочники</strong><small>Единый каталог</small></span>
-          </button>
+        <div className="mx-auto grid max-w-7xl grid-cols-2 gap-2 sm:flex sm:gap-3">
+          {currentRole === 'admin' && (
+            <>
+              <button onClick={() => onSubViewChange('legal_entities')} className="workspace-tile workspace-tile-emerald">
+                <span className="workspace-icon"><Layers aria-hidden="true" /></span>
+                <span><strong>Рабочая область</strong><small>Текущие задачи</small></span>
+              </button>
+              <button onClick={() => onSubViewChange('directories')} className="workspace-tile workspace-tile-violet">
+                <span className="workspace-icon"><Database aria-hidden="true" /></span>
+                <span><strong>Справочники</strong><small>Единый каталог</small></span>
+              </button>
+              <button onClick={() => onSubViewChange('discrepancies')} className="workspace-tile workspace-tile-blue">
+                <span className="workspace-icon"><FileSpreadsheet aria-hidden="true" /></span>
+                <span><strong>Проверка данных</strong><small>Контроль документов</small></span>
+              </button>
+            </>
+          )}
+
+          {currentRole === 'shift_supervisor' && (
+            <>
+              <button onClick={() => onSubViewChange('order')} className="workspace-tile workspace-tile-emerald">
+                <span className="workspace-icon"><Layers aria-hidden="true" /></span>
+                <span><strong>Создание заявки</strong><small>Потребности кофейни</small></span>
+              </button>
+              <button onClick={() => onSubViewChange('deliveries')} className="workspace-tile workspace-tile-violet">
+                <span className="workspace-icon"><Truck aria-hidden="true" /></span>
+                <span><strong>Мои заказы</strong><small>Статус и приёмка</small></span>
+              </button>
+              <button onClick={() => onSubViewChange('order')} className="workspace-tile workspace-tile-blue">
+                <span className="workspace-icon"><Coffee aria-hidden="true" /></span>
+                <span><strong>Смена</strong><small>Рабочие задачи</small></span>
+              </button>
+            </>
+          )}
+
+          {currentRole === 'production_operator' && (
+            <>
+              <button onClick={() => onSubViewChange('summary')} className="workspace-tile workspace-tile-emerald">
+                <span className="workspace-icon"><Truck aria-hidden="true" /></span>
+                <span><strong>Приёмка поставок</strong><small>Сверка заказов</small></span>
+              </button>
+              <button onClick={() => onSubViewChange('summary')} className="workspace-tile workspace-tile-violet">
+                <span className="workspace-icon"><Factory aria-hidden="true" /></span>
+                <span><strong>Выпуск продукции</strong><small>Задания цеха</small></span>
+              </button>
+              <button onClick={() => onSubViewChange('waybills')} className="workspace-tile workspace-tile-blue">
+                <span className="workspace-icon"><FileSpreadsheet aria-hidden="true" /></span>
+                <span><strong>Списание</strong><small>Документы цеха</small></span>
+              </button>
+            </>
+          )}
+
+          {currentRole === 'driver' && (
+            <>
+              <button onClick={() => onSubViewChange('deliveries')} className="workspace-tile workspace-tile-emerald">
+                <span className="workspace-icon"><Truck aria-hidden="true" /></span>
+                <span><strong>Мой маршрут</strong><small>Доставки на сегодня</small></span>
+              </button>
+              <button onClick={() => onSubViewChange('deliveries')} className="workspace-tile workspace-tile-violet">
+                <span className="workspace-icon"><FileSpreadsheet aria-hidden="true" /></span>
+                <span><strong>Подтвердить доставку</strong><small>Статус рейса</small></span>
+              </button>
+            </>
+          )}
         </div>
       </div>
 
