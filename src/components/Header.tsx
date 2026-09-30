@@ -97,20 +97,20 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="border-b border-stone-200 bg-stone-50">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-2 sm:px-6">
           {isAdmin ? (
-            <div className="flex min-w-0 flex-1 items-center gap-1 rounded-xl bg-stone-200/70 p-1">
+            <div className="grid min-w-0 flex-1 grid-cols-4 items-stretch gap-1 rounded-xl bg-stone-200/70 p-1">
               {[['admin', 'Админ', ShieldCheck], ['shift_supervisor', 'Кофейня', Coffee], ['production_operator', 'Цех', Factory], ['driver', 'Водитель', Truck]].map(([role, label, Icon]) => (
-                <button key={role as string} onClick={() => { onRoleChange(role as UserRole); onSubViewChange(role === 'admin' ? 'legal_entities' : role === 'shift_supervisor' ? 'order' : role === 'production_operator' ? 'summary' : 'deliveries'); }} className={`flex min-w-0 flex-1 items-center justify-center gap-1 rounded-lg px-2 py-2 text-xs font-semibold transition-all ${currentRole === role ? 'bg-white text-stone-900 shadow-xs font-bold' : 'text-stone-600 hover:text-stone-900'}`}>
+                <button key={role as string} onClick={() => { onRoleChange(role as UserRole); onSubViewChange(role === 'admin' ? 'legal_entities' : role === 'shift_supervisor' ? 'order' : role === 'production_operator' ? 'summary' : 'deliveries'); }} className={`flex min-w-0 items-center justify-center gap-1 rounded-lg px-1.5 py-2 text-[11px] font-semibold leading-tight transition-all sm:px-2 sm:text-xs ${currentRole === role ? 'bg-white text-stone-900 shadow-xs font-bold' : 'text-stone-600 hover:text-stone-900'}`}>
                   <Icon className="hidden size-3.5 shrink-0 sm:block" />
-                  <span className="truncate">{label as string}</span>
-                  {role === 'production_operator' && hasNewAggregatedOrder && <span className="size-1.5 shrink-0 rounded-full bg-amber-500" />}
+                  <span className="whitespace-nowrap">{label as string}</span>
+                  {role === 'production_operator' && hasNewAggregatedOrder && <span className="size-1.5 shrink-0 rounded-full bg-amber-500" aria-label="Есть новые заказы" />}
                 </button>
               ))}
             </div>
           ) : <div className="flex-1" />}
-          <div className="flex shrink-0 items-center gap-1.5 rounded-lg px-1 text-xs text-stone-600" title="Время операционного сервера">
-            <span className="size-2 rounded-full bg-emerald-600" />
+          <div className="flex shrink-0 items-center gap-1.5 border-l border-stone-300 pl-3 text-xs text-stone-600 sm:pl-4" title="Время операционного сервера">
+            <span className="size-2 shrink-0 rounded-full bg-emerald-600" aria-hidden="true" />
             <span className="hidden font-medium sm:inline">Смена:</span>
-            <span className="font-mono font-bold text-stone-900">{serverTime || '--:--:--'}</span>
+            <span className="font-mono font-bold tabular-nums text-stone-900">{serverTime || '--:--:--'}</span>
           </div>
         </div>
       </div>
