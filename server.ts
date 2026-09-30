@@ -49,7 +49,13 @@ const getAccountId = (req: express.Request): string => {
 
 // Health / database check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', database: 'postgresql', timestamp: new Date().toISOString() });
+  const databaseConfigured = Boolean(process.env.YDB_ENDPOINT && process.env.YDB_DATABASE) || Boolean(process.env.SQL_HOST && process.env.SQL_DB_NAME);
+  res.status(200).json({
+    status: 'ok',
+    database: process.env.YDB_ENDPOINT && process.env.YDB_DATABASE ? 'ydb' : 'postgresql',
+    databaseConfigured,
+    timestamp: new Date().toISOString(),
+  });
 });
 
 // Server Time API with Timezone support
@@ -582,10 +588,16 @@ app.post('/api/reset', async (req, res) => {
 
 // Vite Middleware for Dev / Static for Prod
 async function startServer() {
-  // Run seed in background without blocking server startup
-  seedDatabaseIfEmpty().catch((err) => {
-    console.error('Initial seed error:', err);
-  });
+  // Seed only when a database is explicitly configured. This keeps the
+  // preview and Vercel process healthy before YDB/SQL variables are added.
+  const databaseConfigured = Boolean(process.env.YDB_ENDPOINT && process.env.YDB_DATABASE) || Boolean(process.env.SQL_HOST && process.env.SQL_DB_NAME);
+  if (databaseConfigured) {
+    seedDatabaseIfEmpty().catch((err) => {
+      console.error('Initial seed error:', err);
+    });
+  } else {
+    console.warn('Database is not configured; starting without automatic seeding.');
+  }
 
   const isProd = process.env.NODE_ENV === 'production';
   if (isProd) {
@@ -607,7 +619,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server is running on http://0.0.0.0:${PORT} (PostgreSQL multi-tenant connected)`);
+    console.log(`Server is running on http://0.0.0.0:${PORT} (${databaseConfigured ? 'database configured' : 'database not configured'})`);
   });
 }
 
