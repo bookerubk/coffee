@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import { ensureYdbSchema } from './src/db/ydb.ts';
 import {
   seedDatabaseIfEmpty,
   getPointsQuery,
@@ -333,8 +334,8 @@ app.get('/api/orders/previous/:pointId', async (req, res) => {
     const accountId = getAccountId(req);
     const orders = await getOrdersQuery(accountId);
     const pointOrders = orders
-      .filter((o) => o.pointId === req.params.pointId && o.status !== 'draft')
-      .sort((a, b) => new Date(b.submittedAt || b.createdAt).getTime() - new Date(a.submittedAt || a.createdAt).getTime());
+      .filter((o: any) => o.pointId === req.params.pointId && o.status !== 'draft')
+      .sort((a: any, b: any) => new Date(b.submittedAt || b.createdAt).getTime() - new Date(a.submittedAt || a.createdAt).getTime());
     res.json(pointOrders[0] || null);
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Error fetching previous order' });
@@ -408,14 +409,14 @@ app.post('/api/waybills/generate', async (req, res) => {
     const accountId = req.body.accountId || getAccountId(req);
     const allOrders = await getOrdersQuery(accountId);
     const slotOrders = allOrders.filter(
-      (o) => o.date === date && o.slotId === slotId && o.status === 'submitted'
+      (o: any) => o.date === date && o.slotId === slotId && o.status === 'submitted'
     );
 
     const existingWaybills = await getWaybillsQuery(accountId);
     const created: any[] = [];
 
     for (const ord of slotOrders) {
-      const alreadyHas = existingWaybills.some((w) => w.orderId === ord.id);
+      const alreadyHas = existingWaybills.some((w: any) => w.orderId === ord.id);
       if (!alreadyHas) {
         const waybill = {
           id: `WB-${date.replace(/-/g, '')}-${slotId.charAt(0).toUpperCase()}-${ord.pointId.replace(/[^a-zA-Z0-9]/g, '').slice(-4).toUpperCase()}`,
@@ -448,7 +449,7 @@ app.post('/api/waybills/generate', async (req, res) => {
     }
 
     const updatedList = await getWaybillsQuery(accountId);
-    res.json(updatedList.filter((w) => w.date === date && w.slotId === slotId));
+    res.json(updatedList.filter((w: any) => w.date === date && w.slotId === slotId));
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Error generating waybills' });
   }
@@ -459,7 +460,7 @@ app.put('/api/waybills/:id/dispatch', async (req, res) => {
     const { items, newStatus, operatorName, driverName, driverId, workshopId, legalEntityId } = req.body;
     const accountId = req.body.accountId || getAccountId(req);
     const waybills = await getWaybillsQuery(accountId);
-    const waybill = waybills.find((w) => w.id === req.params.id);
+    const waybill = waybills.find((w: any) => w.id === req.params.id);
     if (!waybill) return res.status(404).json({ error: 'Waybill not found' });
 
     // Validate reason for production discrepancy
@@ -509,7 +510,7 @@ app.put('/api/waybills/:id/driver-status', async (req, res) => {
     const { status, driverName, driverId } = req.body;
     const accountId = req.body.accountId || getAccountId(req);
     const waybills = await getWaybillsQuery(accountId);
-    const waybill = waybills.find((w) => w.id === req.params.id);
+    const waybill = waybills.find((w: any) => w.id === req.params.id);
     if (!waybill) return res.status(404).json({ error: 'Waybill not found' });
 
     if (driverName) waybill.driverName = driverName;
@@ -528,7 +529,7 @@ app.put('/api/waybills/:id/receive', async (req, res) => {
     const { items, supervisorName } = req.body;
     const accountId = req.body.accountId || getAccountId(req);
     const waybills = await getWaybillsQuery(accountId);
-    const waybill = waybills.find((w) => w.id === req.params.id);
+    const waybill = waybills.find((w: any) => w.id === req.params.id);
     if (!waybill) return res.status(404).json({ error: 'Waybill not found' });
 
     let hasDiscrepancy = false;
@@ -592,6 +593,9 @@ async function startServer() {
   // preview and Vercel process healthy before YDB/SQL variables are added.
   const databaseConfigured = Boolean(process.env.YDB_ENDPOINT && process.env.YDB_DATABASE) || Boolean(process.env.SQL_HOST && process.env.SQL_DB_NAME);
   if (databaseConfigured) {
+    if (process.env.YDB_ENDPOINT && process.env.YDB_DATABASE) {
+      ensureYdbSchema().catch((err) => console.error('YDB schema initialization error:', err));
+    }
     seedDatabaseIfEmpty().catch((err) => {
       console.error('Initial seed error:', err);
     });

@@ -235,7 +235,7 @@ export async function seedDatabaseIfEmpty() {
 export async function getTenantAccountsQuery() {
   try {
     const list = await db.select().from(tenantAccounts);
-    return list.map((a) => ({
+    return list.map((a: any) => ({
       id: a.id,
       name: a.name,
       dbSchema: a.dbSchema,
@@ -287,7 +287,7 @@ export async function getPointsQuery(accountId?: string) {
       ? db.select().from(coffeePoints).where(eq(coffeePoints.accountId, accountId))
       : db.select().from(coffeePoints);
     const list = await query;
-    return list.map((p) => ({
+    return list.map((p: any) => ({
       id: p.id,
       accountId: p.accountId,
       name: p.name,
@@ -347,7 +347,7 @@ export async function getProductsQuery(accountId?: string) {
       ? db.select().from(products).where(eq(products.accountId, accountId))
       : db.select().from(products);
     const list = await query;
-    return list.map((p) => ({
+    return list.map((p: any) => ({
       id: p.id,
       accountId: p.accountId,
       sku: p.sku,
@@ -404,7 +404,7 @@ export async function getEmployeesQuery(accountId?: string) {
       ? db.select().from(employees).where(eq(employees.accountId, accountId))
       : db.select().from(employees);
     const list = await query;
-    return list.map((e) => ({
+    return list.map((e: any) => ({
       id: e.id,
       accountId: e.accountId,
       name: e.name,
@@ -474,7 +474,7 @@ export async function getSlotsQuery(accountId?: string) {
     });
 
     // Overlay database values
-    list.forEach((s) => {
+    list.forEach((s: any) => {
       slotMap.set(s.id, {
         id: s.id as 'morning' | 'evening',
         accountId: s.accountId || accountId || 'acc-aroma',
@@ -529,7 +529,7 @@ export async function getOrdersQuery(accountId?: string) {
       ? db.select().from(shiftOrders).where(eq(shiftOrders.accountId, accountId)).orderBy(desc(shiftOrders.createdAt))
       : db.select().from(shiftOrders).orderBy(desc(shiftOrders.createdAt));
     const list = await query;
-    return list.map((o) => ({
+    return list.map((o: any) => ({
       id: o.id,
       accountId: o.accountId,
       idempotencyKey: o.idempotencyKey,
@@ -627,7 +627,7 @@ export async function getWaybillsQuery(accountId?: string) {
       ? db.select().from(waybills).where(eq(waybills.accountId, accountId)).orderBy(desc(waybills.createdAt))
       : db.select().from(waybills).orderBy(desc(waybills.createdAt));
     const list = await query;
-    return list.map((w) => ({
+    return list.map((w: any) => ({
       id: w.id,
       accountId: w.accountId,
       orderId: w.orderId,
@@ -705,7 +705,7 @@ export async function getLegalEntitiesQuery(accountId?: string) {
       ? db.select().from(legalEntities).where(eq(legalEntities.accountId, accountId))
       : db.select().from(legalEntities);
     const list = await query;
-    return list.map((le) => ({
+    return list.map((le: any) => ({
       id: le.id,
       accountId: le.accountId,
       name: le.name,
@@ -796,7 +796,7 @@ export async function getWorkshopsQuery(accountId?: string) {
       ? db.select().from(workshops).where(eq(workshops.accountId, accountId))
       : db.select().from(workshops);
     const list = await query;
-    return list.map((w) => ({
+    return list.map((w: any) => ({
       id: w.id,
       accountId: w.accountId,
       name: w.name,
@@ -860,7 +860,7 @@ export async function getDriversQuery(accountId?: string) {
       ? db.select().from(drivers).where(eq(drivers.accountId, accountId))
       : db.select().from(drivers);
     const list = await query;
-    return list.map((d) => ({
+    return list.map((d: any) => ({
       id: d.id,
       accountId: d.accountId,
       name: d.name,
