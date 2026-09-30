@@ -39,7 +39,7 @@ export async function executeYql<T = Record<string, unknown>>(text: string, para
 }
 
 export async function ensureYdbTable(table: string, columns: string[]) {
-  await executeYql(`CREATE TABLE IF NOT EXISTS \`${table}\` (${columns.map((column) => `${column} Utf8`).join(', ')}, PRIMARY KEY (id));`);
+  await executeYql(`CREATE TABLE IF NOT EXISTS \`${table}\` (${columns.join(', ')}, PRIMARY KEY (id));`);
 }
 
 export async function upsertYdbRow(table: string, row: Record<string, unknown>) {
@@ -67,31 +67,64 @@ export async function closeYdbConnection() {
 }
 
 export const YDB_TABLES = {
-  tenantAccounts: 'tenant_accounts', legalEntities: 'legal_entities', workshops: 'workshops', drivers: 'drivers',
-  coffeePoints: 'coffee_points', products: 'products', employees: 'employees', slots: 'slots',
-  shiftOrders: 'shift_orders', waybills: 'waybills',
+  users: 'users',
+  tenantAccounts: 'tenant_accounts',
+  legalEntities: 'legal_entities',
+  workshops: 'workshops',
+  drivers: 'drivers',
+  coffeePoints: 'coffee_points',
+  products: 'products',
+  employees: 'employees',
+  slots: 'slots',
+  shiftOrders: 'shift_orders',
+  waybills: 'waybills',
 } as const;
 
-export const YDB_COLUMNS = [
-  'id', 'account_id', 'name', 'description', 'status', 'items', 'created_at', 'updated_at', 'archived',
-  'db_schema', 'inn', 'admin_email', 'admin_name', 'short_name', 'kpp', 'ogrn', 'legal_address', 'actual_address',
-  'bank_name', 'bik', 'checking_account', 'correspondent_account', 'director_name', 'phone', 'email', 'tax_system',
-  'source', 'external_id', 'legal_entity_id', 'address', 'chief_name', 'capacity', 'assigned_workshop_id',
-  'vehicle_model', 'license_plate', 'has_refrigerator', 'point_id', 'assigned_employee_ids', 'sku', 'unit', 'category',
-  'role', 'workshop_id', 'driver_id', 'deadline_time', 'delivery_time', 'is_active', 'idempotency_key', 'point_name',
-  'slot_id', 'date', 'created_by', 'submitted_at', 'order_id', 'driver_name', 'dispatched_by', 'dispatched_at',
-  'received_by', 'received_at',
-];
+const baseColumns = ['id Utf8', 'account_id Utf8', 'created_at Utf8'];
+const auditColumns = [...baseColumns, 'updated_at Utf8', 'archived Utf8'];
+
+export const YDB_TABLE_DEFINITIONS: Record<string, string[]> = {
+  users: [...baseColumns, 'uid Utf8', 'email Utf8', 'name Utf8', 'role Utf8', 'point_id Utf8', 'workshop_id Utf8', 'driver_id Utf8'],
+  tenant_accounts: [...baseColumns, 'name Utf8', 'db_schema Utf8', 'inn Utf8', 'admin_email Utf8', 'admin_name Utf8', 'description Utf8'],
+  legal_entities: [...auditColumns, 'name Utf8', 'short_name Utf8', 'inn Utf8', 'kpp Utf8', 'ogrn Utf8', 'legal_address Utf8', 'actual_address Utf8', 'bank_name Utf8', 'bik Utf8', 'checking_account Utf8', 'correspondent_account Utf8', 'director_name Utf8', 'phone Utf8', 'email Utf8', 'tax_system Utf8', 'source Utf8', 'external_id Utf8'],
+  workshops: [...auditColumns, 'name Utf8', 'legal_entity_id Utf8', 'address Utf8', 'chief_name Utf8', 'phone Utf8', 'capacity Utf8', 'source Utf8', 'external_id Utf8'],
+  drivers: [...auditColumns, 'name Utf8', 'phone Utf8', 'legal_entity_id Utf8', 'assigned_workshop_id Utf8', 'vehicle_model Utf8', 'license_plate Utf8', 'has_refrigerator Utf8', 'status Utf8'],
+  coffee_points: [...auditColumns, 'name Utf8', 'address Utf8', 'legal_entity_id Utf8', 'assigned_workshop_id Utf8', 'assigned_employee_ids Utf8', 'source Utf8', 'external_id Utf8'],
+  products: [...auditColumns, 'sku Utf8', 'name Utf8', 'unit Utf8', 'category Utf8', 'source Utf8', 'external_id Utf8'],
+  employees: [...auditColumns, 'name Utf8', 'role Utf8', 'point_id Utf8', 'workshop_id Utf8', 'driver_id Utf8', 'phone Utf8', 'email Utf8'],
+  slots: [...baseColumns, 'name Utf8', 'deadline_time Utf8', 'delivery_time Utf8', 'description Utf8', 'is_active Utf8'],
+  shift_orders: [...baseColumns, 'updated_at Utf8', 'idempotency_key Utf8', 'point_id Utf8', 'point_name Utf8', 'slot_id Utf8', 'date Utf8', 'status Utf8', 'items Utf8', 'created_by Utf8', 'submitted_at Utf8'],
+  waybills: [...baseColumns, 'order_id Utf8', 'point_id Utf8', 'point_name Utf8', 'date Utf8', 'slot_id Utf8', 'status Utf8', 'driver_name Utf8', 'driver_id Utf8', 'workshop_id Utf8', 'legal_entity_id Utf8', 'dispatched_by Utf8', 'dispatched_at Utf8', 'received_by Utf8', 'received_at Utf8', 'items Utf8'],
+};
+
 export async function ensureYdbSchema() {
-  for (const table of Object.values(YDB_TABLES)) await ensureYdbTable(table, YDB_COLUMNS);
+  for (const [table, columns] of Object.entries(YDB_TABLE_DEFINITIONS)) {
+    await ensureYdbTable(table, columns);
+  }
 }
 
 export function toYdbRow(input: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(input).map(([key, value]) => [key.replace(/[A-Z]/g, (match) => `_${match.toLowerCase()}`), typeof value === 'object' && value !== null ? JSON.stringify(value) : value]));
 }
 
+function decodeYdbValue(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  if (value === 'null') return null;
+  if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
 export function fromYdbRow<T>(row: Record<string, unknown>): T {
-  return Object.fromEntries(Object.entries(row).map(([key, value]) => [key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase()), value])) as T;
+  return Object.fromEntries(Object.entries(row).map(([key, value]) => [
+    key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase()),
+    decodeYdbValue(value),
+  ])) as T;
 }
 
 export { createYdbDriver as createPool };
