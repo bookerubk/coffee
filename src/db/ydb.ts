@@ -1,4 +1,26 @@
-import { Driver, QueryClient, getCredentialsFromEnv } from 'ydb-sdk';
+import { Driver, QueryClient, IamAuthService, getCredentialsFromEnv } from 'ydb-sdk';
+
+function createYdbAuthService() {
+  const serviceAccountId = process.env.YDB_SERVICE_ACCOUNT_ID;
+  const keyId = process.env.YDB_KEY_ID;
+  const privateKey = process.env.YDB_PRIVATE_KEY?.replace(/\\n/g, '\n');
+
+  const configuredKeyParts = [serviceAccountId, keyId, privateKey].filter(Boolean).length;
+  if (configuredKeyParts > 0 && configuredKeyParts < 3) {
+    throw new Error('YDB_SERVICE_ACCOUNT_ID, YDB_KEY_ID, and YDB_PRIVATE_KEY must be configured together');
+  }
+
+  if (serviceAccountId && keyId && privateKey) {
+    return new IamAuthService({
+      iamEndpoint: process.env.YDB_IAM_ENDPOINT || 'iam.api.cloud.yandex.net:443',
+      serviceAccountId,
+      accessKeyId: keyId,
+      privateKey: Buffer.from(privateKey),
+    });
+  }
+
+  return getCredentialsFromEnv();
+}
 
 declare global {
   var _ydbDriver: Driver | undefined;
@@ -13,7 +35,7 @@ function connectionString() {
 }
 
 export function createYdbDriver() {
-  global._ydbDriver ??= new Driver({ connectionString: connectionString(), authService: getCredentialsFromEnv() });
+  global._ydbDriver ??= new Driver({ connectionString: connectionString(), authService: createYdbAuthService() });
   return global._ydbDriver;
 }
 
