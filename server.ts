@@ -27,7 +27,6 @@ import {
   upsertTenantAccountQuery,
 } from './src/db/queries.ts';
 
-process.env.DISABLE_HMR = 'true';
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -596,11 +595,12 @@ async function startServer() {
     });
   } else {
     const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: {
-        middlewareMode: true,
-        hmr: false,
-      },
+  const vite = await createViteServer({
+    server: {
+      middlewareMode: true,
+      hmr: process.env.DISABLE_HMR !== 'true',
+      watch: process.env.DISABLE_HMR === 'true' ? null : {},
+    },
       appType: 'spa',
     });
     app.use(vite.middlewares);

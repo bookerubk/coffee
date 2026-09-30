@@ -133,6 +133,7 @@ export interface Employee {
   workshopId?: string;
   driverId?: string;
   phone?: string;
+  email?: string;
   archived: boolean;
 }
 
