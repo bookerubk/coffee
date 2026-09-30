@@ -9,7 +9,10 @@
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "ydb:check": "tsx scripts/ydb-check.ts",
+    "ydb:schema": "tsx scripts/ydb-schema.ts",
+    "ydb:seed": "tsx scripts/ydb-seed.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
