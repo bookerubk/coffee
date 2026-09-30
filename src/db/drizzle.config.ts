@@ -26,6 +26,7 @@ console.log(`Using admin user: ${user} to connect to database.`);
 export default defineConfig({
   schema: './src/db/schema.ts',
   out: './drizzle',
+  // Legacy config retained for tooling compatibility; runtime uses YDB/YQL.
   dialect: 'postgresql',
   schemaFilter: ['public'],
   dbCredentials: {

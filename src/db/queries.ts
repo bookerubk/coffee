@@ -66,7 +66,7 @@ export async function seedDatabaseIfEmpty() {
 
     const existingEntities = await db.select().from(legalEntities).limit(1);
     if (existingEntities.length === 0) {
-      console.log('Seeding legal entities, workshops, and drivers into PostgreSQL...');
+      console.log('Seeding legal entities, workshops, and drivers into YDB...');
       for (const le of INITIAL_LEGAL_ENTITIES) {
         await db.insert(legalEntities).values({
           id: le.id,
@@ -127,7 +127,7 @@ export async function seedDatabaseIfEmpty() {
 
     const existingPoints = await db.select().from(coffeePoints).limit(1);
     if (existingPoints.length === 0) {
-      console.log('Seeding initial points, products, employees into PostgreSQL...');
+      console.log('Seeding initial points, products, employees into YDB...');
 
       // Points
       for (const pt of INITIAL_POINTS) {
@@ -224,7 +224,7 @@ export async function seedDatabaseIfEmpty() {
         }).onConflictDoNothing();
       }
 
-      console.log('Cloud SQL PostgreSQL seeded successfully.');
+      console.log('YDB Cloud seeded successfully.');
     }
   } catch (error) {
     console.error('Failed to seed database:', error);

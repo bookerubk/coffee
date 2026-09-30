@@ -1,177 +1,45 @@
-import { boolean, pgTable, serial, text, timestamp } from 'drizzle-orm/pg-core';
+type YdbColumn = any;
+type YdbTable = Record<string, YdbColumn> & { [key: symbol]: string; name: string };
 
-// Users table (mandatory for Cloud SQL + Firebase auth integration)
-export const users = pgTable('users', {
-  id: serial('id').primaryKey(),
-  uid: text('uid').notNull().unique(), // Firebase Auth UID
-  email: text('email').notNull(),
-  name: text('name'),
-  role: text('role').default('shift_supervisor'),
-  accountId: text('account_id').default('acc-aroma'),
-  pointId: text('point_id'),
-  workshopId: text('workshop_id'),
-  driverId: text('driver_id'),
-  createdAt: timestamp('created_at').defaultNow(),
-});
+const tableSymbol = Symbol.for('drizzle:Name');
 
-// Tenant Accounts / Organizations (Изолированные базы данных / аккаунты компаний)
-export const tenantAccounts = pgTable('tenant_accounts', {
-  id: text('id').primaryKey(), // e.g. "acc-aroma", "acc-nordic"
-  name: text('name').notNull(),
-  dbSchema: text('db_schema').notNull(), // schema / database identifier
-  inn: text('inn').notNull().default(''),
-  adminEmail: text('admin_email').notNull().default(''),
-  adminName: text('admin_name').notNull().default(''),
-  description: text('description').notNull().default(''),
-  createdAt: timestamp('created_at').defaultNow(),
-});
+function ydbTable(name: string, columns: string[]): YdbTable {
+  const table = { name } as YdbTable;
+  Object.defineProperty(table, tableSymbol, { value: name });
+  for (const column of columns) {
+    const camel = column.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+    table[camel] = { name: camel, table };
+  }
+  return table;
+}
 
-// Legal Entities (Юридические лица)
-export const legalEntities = pgTable('legal_entities', {
-  id: text('id').primaryKey(),
-  accountId: text('account_id').notNull().default('acc-aroma'),
-  name: text('name').notNull(),
-  shortName: text('short_name').notNull(),
-  inn: text('inn').notNull(),
-  kpp: text('kpp').notNull().default(''),
-  ogrn: text('ogrn').notNull().default(''),
-  legalAddress: text('legal_address').notNull(),
-  actualAddress: text('actual_address').notNull().default(''),
-  bankName: text('bank_name').notNull().default(''),
-  bik: text('bik').notNull().default(''),
-  checkingAccount: text('checking_account').notNull().default(''),
-  correspondentAccount: text('correspondent_account').notNull().default(''),
-  directorName: text('director_name').notNull().default(''),
-  phone: text('phone').notNull().default(''),
-  email: text('email').notNull().default(''),
-  taxSystem: text('tax_system').notNull().default('УСН (Доходы - Расходы)'),
-  source: text('source').notNull().default('manual'), // manual | external
-  externalId: text('external_id').notNull().default(''),
-  archived: boolean('archived').notNull().default(false),
-  createdAt: timestamp('created_at').defaultNow(),
-});
+const common = ['id', 'account_id', 'created_at'];
 
-// Production Workshops (Производственные цеха и пекарни)
-export const workshops = pgTable('workshops', {
-  id: text('id').primaryKey(),
-  accountId: text('account_id').notNull().default('acc-aroma'),
-  name: text('name').notNull(),
-  legalEntityId: text('legal_entity_id').notNull().default(''),
-  address: text('address').notNull(),
-  chiefName: text('chief_name').notNull().default(''),
-  phone: text('phone').notNull().default(''),
-  capacity: text('capacity').notNull().default(''),
-  source: text('source').notNull().default('manual'), // manual | external
-  externalId: text('external_id').notNull().default(''),
-  archived: boolean('archived').notNull().default(false),
-  createdAt: timestamp('created_at').defaultNow(),
-});
+export const users = ydbTable('users', [...common, 'uid', 'email', 'name', 'role', 'point_id', 'workshop_id', 'driver_id']);
+export const tenantAccounts = ydbTable('tenant_accounts', [...common, 'name', 'db_schema', 'inn', 'admin_email', 'admin_name', 'description']);
+export const legalEntities = ydbTable('legal_entities', [...common, 'name', 'short_name', 'inn', 'kpp', 'ogrn', 'legal_address', 'actual_address', 'bank_name', 'bik', 'checking_account', 'correspondent_account', 'director_name', 'phone', 'email', 'tax_system', 'source', 'external_id', 'archived']);
+export const workshops = ydbTable('workshops', [...common, 'name', 'legal_entity_id', 'address', 'chief_name', 'phone', 'capacity', 'source', 'external_id', 'archived']);
+export const drivers = ydbTable('drivers', [...common, 'name', 'phone', 'legal_entity_id', 'assigned_workshop_id', 'vehicle_model', 'license_plate', 'has_refrigerator', 'status', 'archived']);
+export const coffeePoints = ydbTable('coffee_points', [...common, 'name', 'address', 'legal_entity_id', 'assigned_workshop_id', 'assigned_employee_ids', 'source', 'external_id', 'archived']);
+export const products = ydbTable('products', [...common, 'sku', 'name', 'unit', 'category', 'source', 'external_id', 'archived']);
+export const employees = ydbTable('employees', [...common, 'name', 'role', 'point_id', 'workshop_id', 'driver_id', 'phone', 'email', 'archived']);
+export const slots = ydbTable('slots', ['id', 'account_id', 'name', 'deadline_time', 'delivery_time', 'description', 'is_active']);
+export const shiftOrders = ydbTable('shift_orders', [...common, 'idempotency_key', 'point_id', 'point_name', 'slot_id', 'date', 'status', 'items', 'created_by', 'updated_at', 'submitted_at']);
+export const waybills = ydbTable('waybills', [...common, 'order_id', 'point_id', 'point_name', 'date', 'slot_id', 'status', 'driver_name', 'driver_id', 'workshop_id', 'legal_entity_id', 'dispatched_by', 'dispatched_at', 'received_by', 'received_at', 'items']);
 
-// Delivery Drivers (Водители доставки)
-export const drivers = pgTable('drivers', {
-  id: text('id').primaryKey(),
-  accountId: text('account_id').notNull().default('acc-aroma'),
-  name: text('name').notNull(),
-  phone: text('phone').notNull(),
-  legalEntityId: text('legal_entity_id').notNull().default(''),
-  assignedWorkshopId: text('assigned_workshop_id').notNull().default(''),
-  vehicleModel: text('vehicle_model').notNull().default(''),
-  licensePlate: text('license_plate').notNull().default(''),
-  hasRefrigerator: boolean('has_refrigerator').notNull().default(false),
-  status: text('status').notNull().default('active'), // active | on_route | day_off
-  archived: boolean('archived').notNull().default(false),
-  createdAt: timestamp('created_at').defaultNow(),
-});
+export type User = typeof users;
+export type TenantAccount = typeof tenantAccounts;
+export type LegalEntity = typeof legalEntities;
+export type Workshop = typeof workshops;
+export type Driver = typeof drivers;
+export type CoffeePoint = typeof coffeePoints;
+export type Product = typeof products;
+export type Employee = typeof employees;
+export type Slot = typeof slots;
+export type ShiftOrder = typeof shiftOrders;
+export type Waybill = typeof waybills;
 
-// Coffee Points (Кофейни сети)
-export const coffeePoints = pgTable('coffee_points', {
-  id: text('id').primaryKey(),
-  accountId: text('account_id').notNull().default('acc-aroma'),
-  name: text('name').notNull(),
-  address: text('address').notNull(),
-  legalEntityId: text('legal_entity_id').notNull().default(''),
-  assignedWorkshopId: text('assigned_workshop_id').notNull().default(''),
-  assignedEmployeeIds: text('assigned_employee_ids').notNull().default('[]'),
-  source: text('source').notNull().default('manual'), // manual | external
-  externalId: text('external_id').notNull().default(''),
-  archived: boolean('archived').notNull().default(false),
-  createdAt: timestamp('created_at').defaultNow(),
-});
-
-// Products & SKUs (Товары)
-export const products = pgTable('products', {
-  id: text('id').primaryKey(),
-  accountId: text('account_id').notNull().default('acc-aroma'),
-  sku: text('sku').notNull(),
-  name: text('name').notNull(),
-  unit: text('unit').notNull(),
-  category: text('category').notNull(),
-  source: text('source').notNull().default('manual'), // manual | external
-  externalId: text('external_id').notNull().default(''),
-  archived: boolean('archived').notNull().default(false),
-  createdAt: timestamp('created_at').defaultNow(),
-});
-
-// Employees (Штат сотрудников)
-export const employees = pgTable('employees', {
-  id: text('id').primaryKey(),
-  accountId: text('account_id').notNull().default('acc-aroma'),
-  name: text('name').notNull(),
-  role: text('role').notNull(), // shift_supervisor | production_operator | admin | driver
-  pointId: text('point_id'),
-  workshopId: text('workshop_id'),
-  driverId: text('driver_id'),
-  phone: text('phone'),
-  archived: boolean('archived').notNull().default(false),
-  createdAt: timestamp('created_at').defaultNow(),
-});
-
-// Slots Configuration (Слоты и дедлайны)
-export const slots = pgTable('slots', {
-  id: text('id').primaryKey(), // morning | evening
-  accountId: text('account_id').notNull().default('acc-aroma'),
-  name: text('name').notNull(),
-  deadlineTime: text('deadline_time').notNull(),
-  deliveryTime: text('delivery_time').notNull(),
-  description: text('description').notNull(),
-  isActive: boolean('is_active').notNull().default(true),
-});
-
-// Shift Orders (Заявки смен с Idempotency)
-export const shiftOrders = pgTable('shift_orders', {
-  id: text('id').primaryKey(),
-  accountId: text('account_id').notNull().default('acc-aroma'),
-  idempotencyKey: text('idempotency_key').notNull(),
-  pointId: text('point_id').notNull(),
-  pointName: text('point_name').notNull(),
-  slotId: text('slot_id').notNull(),
-  date: text('date').notNull(),
-  status: text('status').notNull(), // draft | submitted | aggregated
-  items: text('items').notNull(), // JSON serialized OrderItem[]
-  createdBy: text('created_by').notNull(),
-  createdAt: timestamp('created_at').defaultNow(),
-  updatedAt: timestamp('updated_at').defaultNow(),
-  submittedAt: timestamp('submitted_at'),
-});
-
-// Waybills (Накладные отгрузки и приёмки)
-export const waybills = pgTable('waybills', {
-  id: text('id').primaryKey(),
-  accountId: text('account_id').notNull().default('acc-aroma'),
-  orderId: text('order_id').notNull(),
-  pointId: text('point_id').notNull(),
-  pointName: text('point_name').notNull(),
-  date: text('date').notNull(),
-  slotId: text('slot_id').notNull(),
-  status: text('status').notNull(), // formed | packing | dispatched | received | received_with_discrepancies
-  driverName: text('driver_name'),
-  driverId: text('driver_id'),
-  workshopId: text('workshop_id'),
-  legalEntityId: text('legal_entity_id'),
-  dispatchedBy: text('dispatched_by'),
-  dispatchedAt: timestamp('dispatched_at'),
-  receivedBy: text('received_by'),
-  receivedAt: timestamp('received_at'),
-  items: text('items').notNull(), // JSON serialized WaybillItem[]
-  createdAt: timestamp('created_at').defaultNow(),
-});
+export const YDB_SCHEMA = {
+  users, tenantAccounts, legalEntities, workshops, drivers, coffeePoints,
+  products, employees, slots, shiftOrders, waybills,
+} as const;
