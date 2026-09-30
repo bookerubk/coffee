@@ -9,10 +9,20 @@ function columnName(column: any) {
 }
 
 function conditionValue(condition: any) {
-  const chunks = condition?.queryChunks || [];
-  const column = chunks.find((chunk: any) => chunk?.name && chunk?.table)?.name;
-  const param = chunks.find((chunk: any) => chunk?.value !== undefined && !chunk?.name);
-  return column && param ? { column, value: param.value } : undefined;
+  if (condition?.__ydbWhere) return condition.__ydbWhere;
+  return undefined;
+}
+
+export function eq(column: any, value: unknown) {
+  return { __ydbWhere: { column: columnName(column), value } };
+}
+
+export function and(...conditions: any[]) {
+  return { __ydbWhere: { conditions: conditions.map((condition) => condition.__ydbWhere).filter(Boolean) } };
+}
+
+export function desc(column: any) {
+  return { __ydbOrder: { column: columnName(column), direction: 'desc' as const } };
 }
 
 const tableApi = (table: any) => ({
@@ -30,17 +40,26 @@ export const db: any = {
       const builder: any = Promise.resolve().then(async () => {
         const rows = await selectYdbRows(tableName(table));
         const condition = conditionValue(state.condition);
-        const normalizedColumn = condition?.column?.replace(/[A-Z]/g, (match: string) => `_${match.toLowerCase()}`);
-        return rows
-          .filter((row) => !condition || row[normalizedColumn] === condition.value)
-          .map((row) => fromYdbRow(row));
+        const matches = (row: Record<string, unknown>, filter: any): boolean => {
+          if (!filter) return true;
+          if (filter.conditions) return filter.conditions.every((nested: any) => matches(row, nested));
+          const normalizedColumn = filter.column?.replace(/[A-Z]/g, (match: string) => `_${match.toLowerCase()}`);
+          return row[normalizedColumn] === filter.value;
+        };
+        return rows.filter((row) => matches(row, condition)).map((row) => fromYdbRow(row));
       });
       builder.where = (condition: any) => {
         state.condition = condition;
         return builder;
       };
       builder.limit = (limit: number) => Promise.resolve(builder).then((rows) => rows.slice(0, limit));
-      builder.orderBy = () => builder;
+      builder.orderBy = (order: any) => {
+        if (order?.__ydbOrder) {
+          const normalizedColumn = order.__ydbOrder.column.replace(/[A-Z]/g, (match: string) => `_${match.toLowerCase()}`);
+          return builder.then((rows: any[]) => [...rows].sort((a, b) => String(b[normalizedColumn] ?? '').localeCompare(String(a[normalizedColumn] ?? ''))));
+        }
+        return builder;
+      };
       return builder;
     },
   }),

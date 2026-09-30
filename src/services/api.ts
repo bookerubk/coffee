@@ -300,7 +300,7 @@ let lastHandbooksFetchTime = 0;
 let lastHandbooksData: any = null;
 
 /**
- * Full-Stack API Service communicating with PostgreSQL backend (with multi-tenant isolation)
+ * Full-Stack API Service communicating with YDB backend (with multi-tenant isolation)
  */
 export const ApiService = {
   /**
@@ -331,14 +331,14 @@ export const ApiService = {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new ApiError(err.error || 'Ошибка создания аккаунта компании в PostgreSQL');
+      throw new ApiError(err.error || 'Ошибка создания аккаунта компании в YDB');
     }
     StorageManager.saveTenantAccount(account);
     return account;
   },
 
   /**
-   * Submit or save shift order to PostgreSQL with idempotency and timeout protection
+   * Submit or save shift order to YDB with idempotency and timeout protection
    */
   async submitOrder(
     payload: SubmitOrderPayload,
@@ -364,7 +364,7 @@ export const ApiService = {
     if (shouldTimeout) {
       await new Promise<void>((_, reject) => {
         const timer = setTimeout(() => {
-          reject(new ApiError('Таймаут запроса к PostgreSQL (превышено 12 сек). Проверьте соединение.', true));
+          reject(new ApiError('Таймаут запроса к YDB (превышено 12 сек). Проверьте соединение.', true));
         }, 13000);
         abortSignal?.addEventListener('abort', () => {
           clearTimeout(timer);
@@ -407,14 +407,14 @@ export const ApiService = {
       return { success: true, order, isDuplicate: data.isDuplicate };
     } catch (err: any) {
       if (err.name === 'AbortError' || err.isTimeout) {
-        throw new ApiError('Таймаут запроса к PostgreSQL (превышено 12 сек).', true);
+        throw new ApiError('Таймаут запроса к YDB (превышено 12 сек).', true);
       }
       throw err;
     }
   },
 
   /**
-   * Fetch all orders from PostgreSQL (scoped to active account)
+   * Fetch all orders from YDB (scoped to active account)
    */
   async getOrders(): Promise<ShiftOrder[]> {
     try {
@@ -451,7 +451,7 @@ export const ApiService = {
   },
 
   /**
-   * Generate waybills in PostgreSQL
+   * Generate waybills in YDB
    */
   async generateWaybillsForSlot(date: string, slotId: SlotId): Promise<Waybill[]> {
     const res = await fetch('/api/waybills/generate', {
@@ -462,7 +462,7 @@ export const ApiService = {
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new ApiError(err.error || 'Ошибка формирования накладных в PostgreSQL');
+      throw new ApiError(err.error || 'Ошибка формирования накладных в YDB');
     }
 
     const waybills: Waybill[] = await res.json();
@@ -471,7 +471,7 @@ export const ApiService = {
   },
 
   /**
-   * Update dispatch in PostgreSQL
+   * Update dispatch in YDB
    */
   async updateWaybillDispatch(
     waybillId: string,
@@ -504,7 +504,7 @@ export const ApiService = {
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new ApiError(err.error || 'Ошибка сохранения отгрузки в PostgreSQL');
+      throw new ApiError(err.error || 'Ошибка сохранения отгрузки в YDB');
     }
 
     const waybill: Waybill = await res.json();
@@ -543,7 +543,7 @@ export const ApiService = {
   },
 
   /**
-   * Receive waybill and save in PostgreSQL
+   * Receive waybill and save in YDB
    */
   async receiveWaybill(
     waybillId: string,
@@ -568,7 +568,7 @@ export const ApiService = {
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new ApiError(err.error || 'Ошибка приёмки поставки в PostgreSQL');
+      throw new ApiError(err.error || 'Ошибка приёмки поставки в YDB');
     }
 
     const waybill: Waybill = await res.json();
@@ -577,7 +577,7 @@ export const ApiService = {
   },
 
   /**
-   * Sync and fetch all handbooks from PostgreSQL (scoped to active account)
+   * Sync and fetch all handbooks from YDB (scoped to active account)
    */
   async getHandbooks() {
     const now = Date.now();
@@ -633,7 +633,7 @@ export const ApiService = {
   },
 
   /**
-   * Save Legal Entity to PostgreSQL
+   * Save Legal Entity to YDB
    */
   async saveLegalEntity(entity: LegalEntity) {
     try {
@@ -650,7 +650,7 @@ export const ApiService = {
   },
 
   /**
-   * Save Workshop to PostgreSQL
+   * Save Workshop to YDB
    */
   async saveWorkshop(workshop: Workshop) {
     try {
@@ -667,7 +667,7 @@ export const ApiService = {
   },
 
   /**
-   * Save Driver to PostgreSQL
+   * Save Driver to YDB
    */
   async saveDriver(driver: Driver) {
     try {
@@ -684,7 +684,7 @@ export const ApiService = {
   },
 
   /**
-   * Save Point to PostgreSQL
+   * Save Point to YDB
    */
   async savePoint(point: CoffeePoint) {
     try {
@@ -701,7 +701,7 @@ export const ApiService = {
   },
 
   /**
-   * Save Product to PostgreSQL
+   * Save Product to YDB
    */
   async saveProduct(prod: ProductItem) {
     try {
@@ -718,7 +718,7 @@ export const ApiService = {
   },
 
   /**
-   * Save Employee to PostgreSQL
+   * Save Employee to YDB
    */
   async saveEmployee(emp: Employee) {
     try {
@@ -735,7 +735,7 @@ export const ApiService = {
   },
 
   /**
-   * Save Slot to PostgreSQL
+   * Save Slot to YDB
    */
   async saveSlot(slot: SlotConfig) {
     try {
@@ -752,7 +752,7 @@ export const ApiService = {
   },
 
   /**
-   * Sync all waybills from PostgreSQL (scoped to active account)
+   * Sync all waybills from YDB (scoped to active account)
    */
   async getWaybills(): Promise<Waybill[]> {
     try {

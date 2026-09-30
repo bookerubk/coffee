@@ -1,5 +1,4 @@
-import { eq, desc, and } from 'drizzle-orm';
-import { db } from './index.ts';
+import { db, eq, desc, and } from './index.ts';
 import {
   coffeePoints,
   products,

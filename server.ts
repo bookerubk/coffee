@@ -50,10 +50,10 @@ const getAccountId = (req: express.Request): string => {
 
 // Health / database check
 app.get('/api/health', (req, res) => {
-  const databaseConfigured = Boolean(process.env.YDB_ENDPOINT && process.env.YDB_DATABASE) || Boolean(process.env.SQL_HOST && process.env.SQL_DB_NAME);
+  const databaseConfigured = Boolean(process.env.YDB_ENDPOINT && process.env.YDB_DATABASE);
   res.status(200).json({
     status: 'ok',
-    database: process.env.YDB_ENDPOINT && process.env.YDB_DATABASE ? 'ydb' : 'postgresql',
+    database: 'ydb',
     databaseConfigured,
     timestamp: new Date().toISOString(),
   });
@@ -356,7 +356,7 @@ app.post('/api/orders', async (req, res) => {
       }
     }
 
-    // Check Idempotency Key in PostgreSQL
+    // Check Idempotency Key in YDB
     if (payload.idempotencyKey) {
       const existing = await findOrderByKeyQuery(payload.idempotencyKey, accountId);
       if (existing) {
@@ -388,7 +388,7 @@ app.post('/api/orders', async (req, res) => {
     res.json({ success: true, order });
   } catch (error: any) {
     console.error('Failed to submit order:', error);
-    res.status(500).json({ error: error.message || 'Failed to submit order to PostgreSQL' });
+    res.status(500).json({ error: error.message || 'Failed to submit order to YDB' });
   }
 });
 
@@ -591,7 +591,7 @@ app.post('/api/reset', async (req, res) => {
 async function startServer() {
   // Seed only when a database is explicitly configured. This keeps the
   // preview and Vercel process healthy before YDB/SQL variables are added.
-  const databaseConfigured = Boolean(process.env.YDB_ENDPOINT && process.env.YDB_DATABASE) || Boolean(process.env.SQL_HOST && process.env.SQL_DB_NAME);
+  const databaseConfigured = Boolean(process.env.YDB_ENDPOINT && process.env.YDB_DATABASE);
   if (databaseConfigured) {
     if (process.env.YDB_ENDPOINT && process.env.YDB_DATABASE) {
       ensureYdbSchema().catch((err) => console.error('YDB schema initialization error:', err));
