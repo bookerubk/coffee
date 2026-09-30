@@ -6,14 +6,10 @@ import {
   Factory,
   ShieldCheck,
   MapPin,
-  Clock,
   Layers,
   Truck,
   FileSpreadsheet,
-  BookOpen,
-  Bell,
   LogOut,
-  User,
   Database,
 } from 'lucide-react';
 
@@ -60,155 +56,62 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <header className="bg-white border-b border-stone-200 sticky top-0 z-30 shadow-xs">
-      {/* Top Main Bar */}
-      <div className="max-w-7xl mx-auto px-4 pt-4 pb-3 sm:px-6 sm:pt-5 sm:pb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        {/* Brand */}
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="grid size-10 shrink-0 place-items-center rounded-2xl bg-amber-800 text-amber-100 shadow-xs">
-            <Coffee className="size-5 text-amber-200" />
-          </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
+      {/* Global header: brand and account actions only */}
+      <div className="border-b border-stone-100 bg-white">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="grid size-10 shrink-0 place-items-center rounded-2xl bg-amber-800 text-amber-100 shadow-xs">
+              <Coffee className="size-5 text-amber-200" />
+            </div>
+            <div className="min-w-0">
               <h1 className="truncate text-base font-extrabold tracking-tight text-stone-900 sm:text-lg">
                 Кофейня <span className="text-amber-800">→</span> Производство
               </h1>
-              <span className="hidden rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-900 sm:inline">
-                PWA
-              </span>
+              <p className="truncate text-xs text-stone-500">
+                {currentUser?.accountName ? <><span className="text-stone-400">Аккаунт</span> · <strong>{currentUser.accountName}</strong></> : 'Сквозной заказ · Сводный цех · Отгрузка'}
+              </p>
             </div>
-            <p className="mt-0.5 truncate text-xs text-stone-500">
-              {currentUser?.accountName ? (
-                <><span className="text-stone-400">Аккаунт</span> · <strong>{currentUser.accountName}</strong></>
-              ) : (
-                'Сквозной заказ · Сводный цех · Отгрузка'
-              )}
-            </p>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-2">
+            {currentUser && (
+              <div className="hidden items-center gap-2 rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs sm:flex">
+                <div className="grid size-7 place-items-center rounded-lg bg-amber-800 text-white">
+                  {currentUser.role === 'admin' ? <ShieldCheck className="size-4 text-amber-300" /> : currentUser.role === 'shift_supervisor' ? <Coffee className="size-4 text-amber-200" /> : currentUser.role === 'production_operator' ? <Factory className="size-4 text-amber-200" /> : <Truck className="size-4 text-amber-200" />}
+                </div>
+                <div className="max-w-40">
+                  <div className="truncate font-bold text-stone-900">{currentUser.name}</div>
+                  <div className="truncate text-[10px] text-stone-500">{currentUser.role === 'admin' ? 'Администратор' : currentUser.role === 'shift_supervisor' ? 'Старший смены' : currentUser.role === 'production_operator' ? 'Оператор цеха' : 'Водитель'}</div>
+                </div>
+              </div>
+            )}
+            <button onClick={onLogout} className="grid size-9 place-items-center rounded-xl border border-stone-200 bg-stone-50 text-stone-700 transition-colors hover:bg-rose-50 hover:text-rose-700" title="Выйти">
+              <LogOut className="size-4" />
+              <span className="sr-only">Выйти</span>
+            </button>
           </div>
         </div>
+      </div>
 
-        {/* User Session & Logout Controls */}
-        <div className="flex items-center gap-2 self-stretch md:self-auto">
-          {/* Live Operational Server Clock Badge */}
-          <div
-            title="Время операционного сервера"
-            className="flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs text-stone-700 shadow-2xs md:flex-none"
-          >
-            <Clock className="size-4 shrink-0 text-amber-800" />
-            <span className="font-mono font-bold tracking-tight text-stone-900">{serverTime || '--:--:--'}</span>
-            <span className="hidden rounded border border-amber-200 bg-amber-100/80 px-1 py-0.5 font-sans text-[10px] font-semibold text-amber-900 sm:inline">МСК</span>
+      {/* Work toolbar: role tabs and shift status stay on one contained row */}
+      <div className="border-b border-stone-200 bg-stone-50">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-2 sm:px-6">
+          {isAdmin ? (
+            <div className="flex min-w-0 flex-1 items-center gap-1 rounded-xl bg-stone-200/70 p-1">
+              {[['admin', 'Админ', ShieldCheck], ['shift_supervisor', 'Кофейня', Coffee], ['production_operator', 'Цех', Factory], ['driver', 'Водитель', Truck]].map(([role, label, Icon]) => (
+                <button key={role as string} onClick={() => { onRoleChange(role as UserRole); onSubViewChange(role === 'admin' ? 'legal_entities' : role === 'shift_supervisor' ? 'order' : role === 'production_operator' ? 'summary' : 'deliveries'); }} className={`flex min-w-0 flex-1 items-center justify-center gap-1 rounded-lg px-2 py-2 text-xs font-semibold transition-all ${currentRole === role ? 'bg-white text-stone-900 shadow-xs font-bold' : 'text-stone-600 hover:text-stone-900'}`}>
+                  <Icon className="hidden size-3.5 shrink-0 sm:block" />
+                  <span className="truncate">{label as string}</span>
+                  {role === 'production_operator' && hasNewAggregatedOrder && <span className="size-1.5 shrink-0 rounded-full bg-amber-500" />}
+                </button>
+              ))}
+            </div>
+          ) : <div className="flex-1" />}
+          <div className="flex shrink-0 items-center gap-1.5 rounded-lg px-1 text-xs text-stone-600" title="Время операционного сервера">
+            <span className="size-2 rounded-full bg-emerald-600" />
+            <span className="hidden font-medium sm:inline">Смена:</span>
+            <span className="font-mono font-bold text-stone-900">{serverTime || '--:--:--'}</span>
           </div>
-
-          {currentUser && (
-            <div className="min-w-0 flex flex-1 items-center gap-2 rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs md:flex-none">
-              <div className="w-7 h-7 rounded-lg bg-amber-800 text-white flex items-center justify-center font-bold text-xs shrink-0">
-                {currentUser.role === 'admin' ? (
-                  <ShieldCheck className="w-4 h-4 text-amber-300" />
-                ) : currentUser.role === 'shift_supervisor' ? (
-                  <Coffee className="w-4 h-4 text-amber-200" />
-                ) : currentUser.role === 'production_operator' ? (
-                  <Factory className="w-4 h-4 text-amber-200" />
-                ) : (
-                  <Truck className="w-4 h-4 text-amber-200" />
-                )}
-              </div>
-
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <span className="font-bold text-stone-900">{currentUser.name}</span>
-                  <span className="text-[10px] font-semibold px-1.5 py-0.2 rounded bg-amber-100 text-amber-900">
-                    {currentUser.role === 'admin' && 'Администратор'}
-                    {currentUser.role === 'shift_supervisor' && 'Старший смены'}
-                    {currentUser.role === 'production_operator' && 'Оператор цеха'}
-                    {currentUser.role === 'driver' && 'Водитель'}
-                  </span>
-                </div>
-                <div className="text-[10px] text-stone-500 line-clamp-1">
-                  {currentUser.role === 'shift_supervisor' && `Закреплен: ${currentUser.pointName || currentPoint.name}`}
-                  {currentUser.role === 'production_operator' && `Цех: ${currentUser.workshopName || 'Центральный кондитерский'}`}
-                  {currentUser.role === 'driver' && `Авто: ${currentUser.vehicleModel || 'ГАЗель NEXT'} (${currentUser.licensePlate || 'В782ОК 777'})`}
-                  {currentUser.role === 'admin' && 'Полный доступ ко всем объектам'}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Role Selector Tabs (Visible only for Administrator for rapid testing & oversight) */}
-          {isAdmin && (
-            <div className="flex min-w-0 max-w-full items-center gap-1 overflow-x-auto rounded-xl bg-stone-100 p-1 no-scrollbar">
-              <button
-                onClick={() => {
-                  onRoleChange('admin');
-                  onSubViewChange('legal_entities');
-                }}
-                className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer whitespace-nowrap ${
-                  currentRole === 'admin'
-                    ? 'bg-white text-stone-900 shadow-xs font-bold'
-                    : 'text-stone-600 hover:text-stone-900'
-                }`}
-              >
-                <ShieldCheck className="w-3.5 h-3.5 text-amber-800" />
-                <span>Админ</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  onRoleChange('shift_supervisor');
-                  onSubViewChange('order');
-                }}
-                className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer whitespace-nowrap ${
-                  currentRole === 'shift_supervisor'
-                    ? 'bg-white text-stone-900 shadow-xs font-bold'
-                    : 'text-stone-600 hover:text-stone-900'
-                }`}
-              >
-                <Coffee className="w-3.5 h-3.5 text-amber-700" />
-                <span>Кофейня</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  onRoleChange('production_operator');
-                  onSubViewChange('summary');
-                }}
-                className={`relative flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer whitespace-nowrap ${
-                  currentRole === 'production_operator'
-                    ? 'bg-white text-stone-900 shadow-xs font-bold'
-                    : 'text-stone-600 hover:text-stone-900'
-                }`}
-              >
-                <Factory className="w-3.5 h-3.5 text-amber-800" />
-                <span>Цех</span>
-                {hasNewAggregatedOrder && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping"></span>
-                )}
-              </button>
-
-              <button
-                onClick={() => {
-                  onRoleChange('driver');
-                  onSubViewChange('deliveries');
-                }}
-                className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer whitespace-nowrap ${
-                  currentRole === 'driver'
-                    ? 'bg-white text-stone-900 shadow-xs font-bold'
-                    : 'text-stone-600 hover:text-stone-900'
-                }`}
-              >
-                <Truck className="w-3.5 h-3.5 text-amber-800" />
-                <span>Водитель</span>
-              </button>
-            </div>
-          )}
-
-          {/* Switch User / Logout Button */}
-          <button
-            onClick={onLogout}
-            className="flex items-center gap-1 px-2.5 py-1.5 bg-stone-100 hover:bg-rose-50 hover:text-rose-700 text-stone-700 rounded-xl text-xs font-semibold border border-stone-200 transition-colors cursor-pointer"
-            title="Выйти из рабочей области / Сменить аккаунт"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Сменить роль</span>
-          </button>
         </div>
       </div>
 
