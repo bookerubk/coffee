@@ -1628,7 +1628,7 @@ Email: ${entity.email}
                   type="submit"
                   className="w-full sm:w-auto px-5 py-2.5 bg-amber-800 hover:bg-amber-900 text-white rounded-xl text-xs font-bold shadow-sm text-center cursor-pointer"
                 >
-                  Сохранить в PostgreSQL
+                  Сохранить в YDB
                 </button>
               </div>
             </form>
