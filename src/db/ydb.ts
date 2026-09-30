@@ -1,4 +1,26 @@
-import { Driver, QueryClient, getCredentialsFromEnv } from 'ydb-sdk';
+import { Driver, QueryClient, IamAuthService, getCredentialsFromEnv } from 'ydb-sdk';
+
+function createYdbAuthService() {
+  const serviceAccountId = process.env.YDB_SERVICE_ACCOUNT_ID;
+  const keyId = process.env.YDB_KEY_ID;
+  const privateKey = process.env.YDB_PRIVATE_KEY?.replace(/\\n/g, '\n');
+
+  const configuredKeyParts = [serviceAccountId, keyId, privateKey].filter(Boolean).length;
+  if (configuredKeyParts > 0 && configuredKeyParts < 3) {
+    throw new Error('YDB_SERVICE_ACCOUNT_ID, YDB_KEY_ID, and YDB_PRIVATE_KEY must be configured together');
+  }
+
+  if (serviceAccountId && keyId && privateKey) {
+    return new IamAuthService({
+      iamEndpoint: process.env.YDB_IAM_ENDPOINT || 'iam.api.cloud.yandex.net:443',
+      serviceAccountId,
+      accessKeyId: keyId,
+      privateKey: Buffer.from(privateKey),
+    });
+  }
+
+  return getCredentialsFromEnv();
+}
 
 declare global {
   var _ydbDriver: Driver | undefined;
@@ -13,7 +35,7 @@ function connectionString() {
 }
 
 export function createYdbDriver() {
-  global._ydbDriver ??= new Driver({ connectionString: connectionString(), authService: getCredentialsFromEnv() });
+  global._ydbDriver ??= new Driver({ connectionString: connectionString(), authService: createYdbAuthService() });
   return global._ydbDriver;
 }
 
@@ -42,15 +64,25 @@ export async function ensureYdbTable(table: string, columns: string[]) {
   await executeYql(`CREATE TABLE IF NOT EXISTS \`${table}\` (${columns.join(', ')}, PRIMARY KEY (id));`);
 }
 
+function yqlLiteral(value: unknown) {
+  if (value === null || value === undefined) return 'NULL';
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return `'${String(value instanceof Date ? value.toISOString() : value).replace(/'/g, "''")}'`;
+}
+
 export async function upsertYdbRow(table: string, row: Record<string, unknown>) {
   const entries = Object.entries(row).filter(([, value]) => value !== undefined);
   const columns = entries.map(([key]) => key);
-  const values = entries.map(([, value]) => JSON.stringify(value == null ? '' : String(value instanceof Date ? value.toISOString() : value)));
+  const values = entries.map(([, value]) => yqlLiteral(value));
   await executeYql(`UPSERT INTO \`${table}\` (${columns.join(', ')}) VALUES (${values.join(', ')});`);
 }
 
-export async function selectYdbRows(table: string, accountId?: string) {
-  const where = accountId ? ` WHERE account_id = '${accountId.replace(/'/g, "''")}'` : '';
+export async function selectYdbRows(table: string, filters: Record<string, unknown> = {}) {
+  const entries = Object.entries(filters).filter(([, value]) => value !== undefined);
+  const where = entries.length > 0
+    ? ` WHERE ${entries.map(([column, value]) => `${column} = ${yqlLiteral(value)}`).join(' AND ')}`
+    : '';
   return executeYql<Record<string, unknown>>(`SELECT * FROM \`${table}\`${where};`);
 }
 

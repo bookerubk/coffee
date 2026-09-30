@@ -1,11 +1,8 @@
 type YdbColumn = any;
-type YdbTable = Record<string, YdbColumn> & { [key: symbol]: string; name: string };
+type YdbTable = Record<string, YdbColumn> & { name: string };
 
-const tableSymbol = Symbol.for('drizzle:Name');
-
-function ydbTable(name: string, columns: string[]): YdbTable {
+function ydbTable(name: string, columns: string[]) {
   const table = { name } as YdbTable;
-  Object.defineProperty(table, tableSymbol, { value: name });
   for (const column of columns) {
     const camel = column.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
     table[camel] = { name: camel, table };

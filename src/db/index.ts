@@ -1,7 +1,7 @@
 import { fromYdbRow, selectYdbRows, toYdbRow, upsertYdbRow, YDB_TABLES } from './ydb.ts';
 
 function tableName(table: any) {
-  return table?.[Symbol.for('drizzle:Name')] || table?.name;
+  return table?.name;
 }
 
 function columnName(column: any) {
@@ -38,8 +38,13 @@ export const db: any = {
     from: (table: any) => {
       const state: any = { table };
       const builder: any = Promise.resolve().then(async () => {
-        const rows = await selectYdbRows(tableName(table));
         const condition = conditionValue(state.condition);
+        const filters = condition?.conditions ?? (condition ? [condition] : []);
+        const rows = await selectYdbRows(tableName(table), Object.fromEntries(filters.map((filter: any) => [
+          filter.column.replace(/[A-Z]/g, (match: string) => `_${match.toLowerCase()}`),
+          filter.value,
+        ])));
+
         const matches = (row: Record<string, unknown>, filter: any): boolean => {
           if (!filter) return true;
           if (filter.conditions) return filter.conditions.every((nested: any) => matches(row, nested));

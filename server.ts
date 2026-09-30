@@ -590,7 +590,7 @@ app.post('/api/reset', async (req, res) => {
 // Vite Middleware for Dev / Static for Prod
 async function startServer() {
   // Seed only when a database is explicitly configured. This keeps the
-  // preview and Vercel process healthy before YDB/SQL variables are added.
+  // preview and Vercel process healthy before YDB variables are added.
   const databaseConfigured = Boolean(process.env.YDB_ENDPOINT && process.env.YDB_DATABASE);
   if (databaseConfigured) {
     if (process.env.YDB_AUTO_SCHEMA === 'true') {
