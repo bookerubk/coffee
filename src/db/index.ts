@@ -1,7 +1,7 @@
 import { fromYdbRow, selectYdbRows, toYdbRow, upsertYdbRow, YDB_TABLES } from './ydb.ts';
 
 function tableName(table: any) {
-  return table?.[Symbol.for('drizzle:Name')] || table?.name;
+  return table?.name;
 }
 
 function columnName(column: any) {
