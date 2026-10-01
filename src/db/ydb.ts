@@ -1,28 +1,13 @@
-import { Driver, QueryClient, IamAuthService, getCredentialsFromEnv } from 'ydb-sdk';
+import { Driver } from '@ydbjs/core';
+import { AccessTokenCredentialsProvider } from '@ydbjs/auth/access-token';
+import { query, type QueryClient } from '@ydbjs/query';
 
-function createYdbAuthService() {
-  const serviceAccountId = process.env.YDB_SERVICE_ACCOUNT_ID;
-  const keyId = process.env.YDB_KEY_ID;
-  const privateKey = process.env.YDB_PRIVATE_KEY
-    ?.trim()
-    .replace(/^['"]|['"]$/g, '')
-    .replace(/\\n/g, '\n');
-
-  const configuredKeyParts = [serviceAccountId, keyId, privateKey].filter(Boolean).length;
-  if (configuredKeyParts > 0 && configuredKeyParts < 3) {
-    throw new Error('YDB_SERVICE_ACCOUNT_ID, YDB_KEY_ID, and YDB_PRIVATE_KEY must be configured together');
+function createYdbCredentialsProvider() {
+  const token = process.env.YDB_TOKEN?.trim();
+  if (!token) {
+    throw new Error('YDB_TOKEN must be configured for the @ydbjs/core driver');
   }
-
-  if (serviceAccountId && keyId && privateKey) {
-    return new IamAuthService({
-      iamEndpoint: process.env.YDB_IAM_ENDPOINT || 'iam.api.cloud.yandex.net:443',
-      serviceAccountId,
-      accessKeyId: keyId,
-      privateKey: Buffer.from(privateKey),
-    });
-  }
-
-  return getCredentialsFromEnv();
+  return new AccessTokenCredentialsProvider({ token });
 }
 
 declare global {
@@ -38,29 +23,20 @@ function connectionString() {
 }
 
 export function createYdbDriver() {
-  global._ydbDriver ??= new Driver({ connectionString: connectionString(), authService: createYdbAuthService() });
+  global._ydbDriver ??= new Driver(connectionString(), {
+    credentialsProvider: createYdbCredentialsProvider(),
+  });
   return global._ydbDriver;
 }
 
 export function createYdbQueryClient() {
-  global._ydbQueryClient ??= createYdbDriver().queryClient;
+  global._ydbQueryClient ??= query(createYdbDriver());
   return global._ydbQueryClient;
 }
 
-export async function executeYql<T = Record<string, unknown>>(text: string, parameters?: Record<string, unknown>) {
-  const client = createYdbQueryClient();
-  return client.do({
-    fn: async (session) => {
-      const result = await session.execute({ text, parameters: parameters as never, rowMode: 0 });
-      const rows: T[] = [];
-      for await (const resultSet of result.resultSets) {
-        for await (const row of resultSet.rows) rows.push(row as T);
-      }
-      await result.opFinished;
-      return rows;
-    },
-    idempotent: true,
-  });
+export async function executeYql<T = Record<string, unknown>>(text: string, _parameters?: Record<string, unknown>) {
+  const resultSets = await createYdbQueryClient()(text).idempotent(true);
+  return resultSets.flat() as T[];
 }
 
 export async function ensureYdbTable(table: string, columns: string[]) {
@@ -95,8 +71,8 @@ export async function checkYdbConnection() {
 }
 
 export async function closeYdbConnection() {
-  await global._ydbQueryClient?.destroy();
-  await global._ydbDriver?.destroy();
+  await global._ydbQueryClient?.[Symbol.asyncDispose]();
+  await global._ydbDriver?.[Symbol.asyncDispose]();
   global._ydbQueryClient = undefined;
   global._ydbDriver = undefined;
 }
