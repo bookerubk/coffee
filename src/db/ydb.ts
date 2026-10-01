@@ -1,6 +1,7 @@
 import { Driver } from '@ydbjs/core';
 import { AccessTokenCredentialsProvider } from '@ydbjs/auth/access-token';
 import { query, type QueryClient } from '@ydbjs/query';
+import { fromJs } from '@ydbjs/value';
 
 function createYdbCredentialsProvider() {
   const token = process.env.YDB_TOKEN?.trim();
@@ -34,8 +35,12 @@ export function createYdbQueryClient() {
   return global._ydbQueryClient;
 }
 
-export async function executeYql<T = Record<string, unknown>>(text: string, _parameters?: Record<string, unknown>) {
-  const resultSets = await createYdbQueryClient()(text).idempotent(true);
+export async function executeYql<T = Record<string, unknown>>(text: string, parameters: Record<string, unknown> = {}) {
+  let request = createYdbQueryClient()(text);
+  for (const [name, value] of Object.entries(parameters)) {
+    request = request.param(name, value === undefined ? undefined : fromJs(value as never));
+  }
+  const resultSets = await request.idempotent(true);
   return resultSets.flat() as T[];
 }
 
@@ -43,26 +48,21 @@ export async function ensureYdbTable(table: string, columns: string[]) {
   await executeYql(`CREATE TABLE IF NOT EXISTS \`${table}\` (${columns.join(', ')}, PRIMARY KEY (id));`);
 }
 
-function yqlLiteral(value: unknown) {
-  if (value === null || value === undefined) return 'NULL';
-  if (typeof value === 'boolean') return value ? 'true' : 'false';
-  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
-  return `'${String(value instanceof Date ? value.toISOString() : value).replace(/'/g, "''")}'`;
-}
-
 export async function upsertYdbRow(table: string, row: Record<string, unknown>) {
   const entries = Object.entries(row).filter(([, value]) => value !== undefined);
   const columns = entries.map(([key]) => key);
-  const values = entries.map(([, value]) => yqlLiteral(value));
-  await executeYql(`UPSERT INTO \`${table}\` (${columns.join(', ')}) VALUES (${values.join(', ')});`);
+  const parameters = Object.fromEntries(entries.map(([key, value]) => [`_${key}`, value]));
+  const values = entries.map(([key]) => `\$_${key}`);
+  await executeYql(`UPSERT INTO \`${table}\` (${columns.join(', ')}) VALUES (${values.join(', ')});`, parameters);
 }
 
 export async function selectYdbRows(table: string, filters: Record<string, unknown> = {}) {
   const entries = Object.entries(filters).filter(([, value]) => value !== undefined);
+  const parameters = Object.fromEntries(entries.map(([column, value]) => [`_${column}`, value]));
   const where = entries.length > 0
-    ? ` WHERE ${entries.map(([column, value]) => `${column} = ${yqlLiteral(value)}`).join(' AND ')}`
+    ? ` WHERE ${entries.map(([column]) => `${column} = \$_${column}`).join(' AND ')}`
     : '';
-  return executeYql<Record<string, unknown>>(`SELECT * FROM \`${table}\`${where};`);
+  return executeYql<Record<string, unknown>>(`SELECT * FROM \`${table}\`${where};`, parameters);
 }
 
 export async function checkYdbConnection() {
