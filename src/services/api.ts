@@ -128,7 +128,7 @@ export function getOperationalTimeParts(tz = activeOperationalTimezone) {
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
-      hour12: false,
+      hourCycle: 'h23', // hour12:false может дать «24» в полночь и сломать расчёт дедлайнов
     });
     const parts = formatter.formatToParts(now);
     const getPart = (type: string) => Number(parts.find((p) => p.type === type)?.value || '0');
@@ -259,7 +259,7 @@ export function getSlotDeadlineDetails(slotId: SlotId, customSlots?: SlotConfig[
   }
 
   let remainingText = '';
-  if (remainingMinutes > 60) {
+  if (remainingMinutes >= 60) {
     const hrs = Math.floor(remainingMinutes / 60);
     const mins = remainingMinutes % 60;
     remainingText = `${hrs} ч. ${mins > 0 ? `${mins} мин.` : ''}`.trim();
@@ -295,9 +295,40 @@ export function isSlotDeadlinePassed(slotId: SlotId, forceOverride?: boolean, cu
 }
 
 // In-flight deduplication and short caching for getHandbooks to prevent request storms
-let handbooksInFlight: Promise<any> | null = null;
+// Кэш привязан к аккаунту: иначе при входе под другим аккаунтом в течение 3 секунд
+// пользователь получил бы справочники прежнего аккаунта.
+let handbooksInFlight: { accountId: string; promise: Promise<any> } | null = null;
 let lastHandbooksFetchTime = 0;
 let lastHandbooksData: any = null;
+let lastHandbooksAccountId = '';
+
+function reportSyncError(message: string) {
+  console.error(message);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('coffee-sync-error', { detail: { message } }));
+  }
+}
+
+/**
+ * Сохраняет сущность на сервере. Раньше ответ сервера не проверялся: при ошибке 500
+ * изменение молча оставалось только в localStorage и пропадало при следующей синхронизации.
+ * Теперь ошибка показывается пользователю (событие coffee-sync-error), а функция возвращает false.
+ */
+async function persistToServer(path: string, label: string, body: object): Promise<boolean> {
+  try {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: getApiHeaders(),
+      body: JSON.stringify({ ...body, accountId: StorageManager.getActiveAccountId() }),
+    });
+    if (res.ok) return true;
+    const err = await res.json().catch(() => ({}));
+    reportSyncError(`Не удалось сохранить ${label} на сервере: ${err.error || `ошибка ${res.status}`}. Изменение сохранено только в этом браузере.`);
+  } catch (e) {
+    reportSyncError(`Нет связи с сервером: ${label} сохранён только в этом браузере.`);
+  }
+  return false;
+}
 
 /**
  * Full-Stack API Service communicating with YDB backend (with multi-tenant isolation)
@@ -453,11 +484,11 @@ export const ApiService = {
   /**
    * Generate waybills in YDB
    */
-  async generateWaybillsForSlot(date: string, slotId: SlotId): Promise<Waybill[]> {
+  async generateWaybillsForSlot(date: string, slotId: SlotId, workshopId?: string): Promise<Waybill[]> {
     const res = await fetch('/api/waybills/generate', {
       method: 'POST',
       headers: getApiHeaders(),
-      body: JSON.stringify({ date, slotId, accountId: StorageManager.getActiveAccountId() }),
+      body: JSON.stringify({ date, slotId, workshopId, accountId: StorageManager.getActiveAccountId() }),
     });
 
     if (!res.ok) {
@@ -581,25 +612,31 @@ export const ApiService = {
    */
   async getHandbooks() {
     const now = Date.now();
+    const accountId = StorageManager.getActiveAccountId();
     // Return cached handbooks if fetched within 3 seconds to avoid burst storms
-    if (lastHandbooksData && now - lastHandbooksFetchTime < 3000) {
+    if (lastHandbooksData && lastHandbooksAccountId === accountId && now - lastHandbooksFetchTime < 3000) {
       return lastHandbooksData;
     }
 
-    // Deduplicate in-flight requests
-    if (handbooksInFlight) {
-      return handbooksInFlight;
+    // Deduplicate in-flight requests (только для того же аккаунта)
+    if (handbooksInFlight && handbooksInFlight.accountId === accountId) {
+      return handbooksInFlight.promise;
     }
 
-    handbooksInFlight = (async () => {
+    const entry: { accountId: string; promise: Promise<any> } = { accountId, promise: undefined as unknown as Promise<any> };
+    entry.promise = (async () => {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 12000);
-        const res = await fetch('/api/handbooks', {
-          headers: getApiHeaders(),
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
+        let res: Response;
+        try {
+          res = await fetch('/api/handbooks', {
+            headers: getApiHeaders(),
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timeoutId);
+        }
 
         if (res.ok) {
           const data = await res.json();
@@ -607,6 +644,7 @@ export const ApiService = {
           StorageManager.syncHandbooks(data);
           lastHandbooksFetchTime = Date.now();
           lastHandbooksData = data;
+          lastHandbooksAccountId = accountId;
           return data;
         }
       } catch (e: any) {
@@ -614,7 +652,7 @@ export const ApiService = {
           console.warn('Falling back to local handbooks:', e?.message || e);
         }
       } finally {
-        handbooksInFlight = null;
+        if (handbooksInFlight === entry) handbooksInFlight = null;
       }
 
       return {
@@ -628,127 +666,71 @@ export const ApiService = {
         accounts: StorageManager.getTenantAccounts(),
       };
     })();
-
-    return handbooksInFlight;
+    handbooksInFlight = entry;
+    return entry.promise;
   },
 
   /**
    * Save Legal Entity to YDB
    */
-  async saveLegalEntity(entity: LegalEntity) {
-    try {
-      const accountId = StorageManager.getActiveAccountId();
-      await fetch('/api/legal-entities', {
-        method: 'POST',
-        headers: getApiHeaders(),
-        body: JSON.stringify({ ...entity, accountId }),
-      });
-    } catch (e) {
-      console.error(e);
-    }
+  async saveLegalEntity(entity: LegalEntity): Promise<boolean> {
+    const persisted = await persistToServer('/api/legal-entities', 'юридическое лицо', entity);
     StorageManager.saveLegalEntity(entity);
+    return persisted;
   },
 
   /**
    * Save Workshop to YDB
    */
-  async saveWorkshop(workshop: Workshop) {
-    try {
-      const accountId = StorageManager.getActiveAccountId();
-      await fetch('/api/workshops', {
-        method: 'POST',
-        headers: getApiHeaders(),
-        body: JSON.stringify({ ...workshop, accountId }),
-      });
-    } catch (e) {
-      console.error(e);
-    }
+  async saveWorkshop(workshop: Workshop): Promise<boolean> {
+    const persisted = await persistToServer('/api/workshops', 'цех', workshop);
     StorageManager.saveWorkshop(workshop);
+    return persisted;
   },
 
   /**
    * Save Driver to YDB
    */
-  async saveDriver(driver: Driver) {
-    try {
-      const accountId = StorageManager.getActiveAccountId();
-      await fetch('/api/drivers', {
-        method: 'POST',
-        headers: getApiHeaders(),
-        body: JSON.stringify({ ...driver, accountId }),
-      });
-    } catch (e) {
-      console.error(e);
-    }
+  async saveDriver(driver: Driver): Promise<boolean> {
+    const persisted = await persistToServer('/api/drivers', 'водителя', driver);
     StorageManager.saveDriver(driver);
+    return persisted;
   },
 
   /**
    * Save Point to YDB
    */
-  async savePoint(point: CoffeePoint) {
-    try {
-      const accountId = StorageManager.getActiveAccountId();
-      await fetch('/api/points', {
-        method: 'POST',
-        headers: getApiHeaders(),
-        body: JSON.stringify({ ...point, accountId }),
-      });
-    } catch (e) {
-      console.error(e);
-    }
+  async savePoint(point: CoffeePoint): Promise<boolean> {
+    const persisted = await persistToServer('/api/points', 'кофейню', point);
     StorageManager.savePoint(point);
+    return persisted;
   },
 
   /**
    * Save Product to YDB
    */
-  async saveProduct(prod: ProductItem) {
-    try {
-      const accountId = StorageManager.getActiveAccountId();
-      await fetch('/api/products', {
-        method: 'POST',
-        headers: getApiHeaders(),
-        body: JSON.stringify({ ...prod, accountId }),
-      });
-    } catch (e) {
-      console.error(e);
-    }
+  async saveProduct(prod: ProductItem): Promise<boolean> {
+    const persisted = await persistToServer('/api/products', 'товар', prod);
     StorageManager.saveProduct(prod);
+    return persisted;
   },
 
   /**
    * Save Employee to YDB
    */
-  async saveEmployee(emp: Employee) {
-    try {
-      const accountId = StorageManager.getActiveAccountId();
-      await fetch('/api/employees', {
-        method: 'POST',
-        headers: getApiHeaders(),
-        body: JSON.stringify({ ...emp, accountId }),
-      });
-    } catch (e) {
-      console.error(e);
-    }
+  async saveEmployee(emp: Employee): Promise<boolean> {
+    const persisted = await persistToServer('/api/employees', 'сотрудника', emp);
     StorageManager.saveEmployee(emp);
+    return persisted;
   },
 
   /**
    * Save Slot to YDB
    */
-  async saveSlot(slot: SlotConfig) {
-    try {
-      const accountId = StorageManager.getActiveAccountId();
-      await fetch('/api/slots', {
-        method: 'POST',
-        headers: getApiHeaders(),
-        body: JSON.stringify({ ...slot, accountId }),
-      });
-    } catch (e) {
-      console.error(e);
-    }
+  async saveSlot(slot: SlotConfig): Promise<boolean> {
+    const persisted = await persistToServer('/api/slots', 'настройки смены', slot);
     StorageManager.saveSlot(slot);
+    return persisted;
   },
 
   /**

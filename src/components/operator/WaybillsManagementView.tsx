@@ -33,7 +33,7 @@ export const WaybillsManagementView: React.FC<WaybillsManagementViewProps> = ({
   // Dispatch modal state
   const [dispatchedValues, setDispatchedValues] = useState<Record<string, number>>({});
   const [dispatchReasons, setDispatchReasons] = useState<Record<string, string>>({});
-  const [driverName, setDriverName] = useState<string>('Михаил (Газель в782ок)');
+  const [driverName, setDriverName] = useState<string>('');
   const [driverId, setDriverId] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -46,10 +46,13 @@ export const WaybillsManagementView: React.FC<WaybillsManagementViewProps> = ({
       ? new Set(allPoints.filter((p) => p.assignedWorkshopId === workshopId).map((p) => p.id))
       : null;
 
+    // Раньше все ветки возвращали true, и фильтр по цеху не работал
+    // (оператор видел накладные чужих цехов).
     const filtered = all.filter((w) => {
       if (!workshopId) return true;
-      if (w.workshopId && w.workshopId === workshopId) return true;
-      if (workshopPointIds && workshopPointIds.has(w.pointId)) return true;
+      if (w.workshopId) return w.workshopId === workshopId;
+      // Если за цехом не закреплено ни одной точки — показываем всё (как и сводный заказ)
+      if (workshopPointIds && workshopPointIds.size > 0) return workshopPointIds.has(w.pointId);
       return true;
     });
     setWaybills(filtered);
@@ -87,8 +90,10 @@ export const WaybillsManagementView: React.FC<WaybillsManagementViewProps> = ({
 
     setDispatchedValues(initialDispatched);
     setDispatchReasons(initialReasons);
-    if (wb.driverName) setDriverName(wb.driverName);
-    if (wb.driverId) setDriverId(wb.driverId);
+    // Водитель берётся из самой накладной: раньше выбор из предыдущей накладной
+    // «переезжал» в следующую (имя и id водителя могли не совпадать)
+    setDriverName(wb.driverName || '');
+    setDriverId(wb.driverId || '');
     setErrorMsg(null);
   };
 

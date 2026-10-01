@@ -1,7 +1,9 @@
 import { fromYdbRow, selectYdbRows, toYdbRow, upsertYdbRow, YDB_TABLES } from './ydb.ts';
 
-function tableName(table: any) {
-  return table?.name;
+function tableName(table: any): string {
+  const name = table?.__tableName;
+  if (typeof name !== 'string') throw new Error('Unknown YDB table reference');
+  return name;
 }
 
 function columnName(column: any) {
@@ -25,11 +27,30 @@ export function desc(column: any) {
   return { __ydbOrder: { column: columnName(column), direction: 'desc' as const } };
 }
 
+/**
+ * Минимальная замена drizzle-подобного API поверх YDB.
+ *  - onConflictDoNothing: вставляет строку, только если такого id ещё нет;
+ *  - onConflictDoUpdate: если строка есть — обновляет только поля из `set`
+ *    (createdAt, idempotencyKey и т.п. не затираются), иначе вставляет целиком.
+ */
 const tableApi = (table: any) => ({
   table,
-  values: (values: any) => ({
-    onConflictDoNothing: async () => upsertYdbRow(tableName(table), toYdbRow(values)),
-  }),
+  values: (values: any) => {
+    const name = tableName(table);
+    const exists = async () => (await selectYdbRows(name, { id: values.id })).length > 0;
+    return {
+      onConflictDoNothing: async () => {
+        if (!(await exists())) await upsertYdbRow(name, toYdbRow(values));
+      },
+      onConflictDoUpdate: async (options: { target?: any; set: Record<string, unknown> }) => {
+        if (await exists()) {
+          await upsertYdbRow(name, toYdbRow({ id: values.id, ...options.set }));
+        } else {
+          await upsertYdbRow(name, toYdbRow(values));
+        }
+      },
+    };
+  },
 });
 
 export const db: any = {

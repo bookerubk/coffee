@@ -261,11 +261,16 @@ export const StorageManager = {
   },
 
   // Orders
+  // Кэш в localStorage общий для всех аккаунтов, поэтому при чтении отбираем записи
+  // активного аккаунта (демо-данные без accountId относятся к 'acc-aroma').
   getOrders(): ShiftOrder[] {
-    return getStoredItem<ShiftOrder[]>(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
+    const accountId = this.getActiveAccountId();
+    return getStoredItem<ShiftOrder[]>(STORAGE_KEYS.ORDERS, INITIAL_ORDERS).filter(
+      (o) => (o.accountId || 'acc-aroma') === accountId
+    );
   },
   saveOrder(order: ShiftOrder): void {
-    const orders = this.getOrders();
+    const orders = getStoredItem<ShiftOrder[]>(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
     const idx = orders.findIndex((o) => o.id === order.id);
     if (idx >= 0) {
       orders[idx] = order;
@@ -277,10 +282,13 @@ export const StorageManager = {
 
   // Waybills
   getWaybills(): Waybill[] {
-    return getStoredItem<Waybill[]>(STORAGE_KEYS.WAYBILLS, INITIAL_WAYBILLS);
+    const accountId = this.getActiveAccountId();
+    return getStoredItem<Waybill[]>(STORAGE_KEYS.WAYBILLS, INITIAL_WAYBILLS).filter(
+      (w) => (w.accountId || 'acc-aroma') === accountId
+    );
   },
   saveWaybill(waybill: Waybill): void {
-    const waybills = this.getWaybills();
+    const waybills = getStoredItem<Waybill[]>(STORAGE_KEYS.WAYBILLS, INITIAL_WAYBILLS);
     const idx = waybills.findIndex((w) => w.id === waybill.id);
     if (idx >= 0) {
       waybills[idx] = waybill;
@@ -313,11 +321,20 @@ export const StorageManager = {
   },
   saveDraft(pointId: string, slotId: string, data: any): void {
     const key = `coffee_draft_${pointId}_${slotId}`;
-    localStorage.setItem(key, JSON.stringify({ ...data, savedAt: new Date().toISOString() }));
+    try {
+      localStorage.setItem(key, JSON.stringify({ ...data, savedAt: new Date().toISOString() }));
+    } catch (e) {
+      // Переполнение хранилища / приватный режим — не должно ронять интерфейс
+      console.error('Не удалось сохранить черновик локально', e);
+    }
   },
   clearDraft(pointId: string, slotId: string): void {
     const key = `coffee_draft_${pointId}_${slotId}`;
-    localStorage.removeItem(key);
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      /* хранилище недоступно */
+    }
   },
 
   // Local Emergency Backups (from Section 4.2 "Сохранить локально")
@@ -330,19 +347,29 @@ export const StorageManager = {
       return null;
     }
   },
-  saveLocalBackup(pointId: string, slotId: string, data: any): void {
+  saveLocalBackup(pointId: string, slotId: string, data: any): boolean {
     const key = `coffee_emergency_backup_${pointId}_${slotId}`;
-    localStorage.setItem(
-      key,
-      JSON.stringify({
-        ...data,
-        backupAt: new Date().toISOString(),
-      })
-    );
+    try {
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          ...data,
+          backupAt: new Date().toISOString(),
+        })
+      );
+      return true;
+    } catch (e) {
+      console.error('Не удалось сохранить аварийную копию заявки', e);
+      return false;
+    }
   },
   clearLocalBackup(pointId: string, slotId: string): void {
     const key = `coffee_emergency_backup_${pointId}_${slotId}`;
-    localStorage.removeItem(key);
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      /* хранилище недоступно */
+    }
   },
 
   // Testing Toggles

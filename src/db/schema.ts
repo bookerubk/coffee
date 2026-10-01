@@ -1,6 +1,8 @@
 export type YdbType = 'Utf8' | 'Uint64' | 'Int64' | 'Bool' | 'Json';
 export type YdbColumn = { name: string; type: YdbType; table: YdbTable };
-type YdbTable = Record<string, YdbColumn> & { name: string };
+// Имя таблицы хранится в служебном поле: у многих таблиц есть колонка `name`,
+// и раньше она затирала имя таблицы (запросы уходили в таблицу "[object Object]").
+type YdbTable = Record<string, YdbColumn> & { __tableName: string };
 
 const UINT64_COLUMNS = new Set(['capacity']);
 const BOOL_COLUMNS = new Set(['archived', 'has_refrigerator', 'is_active']);
@@ -14,7 +16,7 @@ function ydbTypeForColumn(column: string): YdbType {
 }
 
 function ydbTable(name: string, columns: string[]) {
-  const table = { name } as YdbTable;
+  const table = { __tableName: name } as YdbTable;
   for (const column of columns) {
     const camel = column.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
     table[camel] = { name: camel, type: ydbTypeForColumn(column), table };

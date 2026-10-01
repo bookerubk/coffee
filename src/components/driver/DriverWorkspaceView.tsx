@@ -31,17 +31,32 @@ export const DriverWorkspaceView: React.FC<DriverWorkspaceViewProps> = ({ curren
 
   const loadData = () => {
     const allWaybills = StorageManager.getWaybills();
-    // Filter by this driver's name or driverId
-    const myWaybills = allWaybills.filter((w) => {
-      if (currentUser.driverId && w.driverId === currentUser.driverId) return true;
-      if (w.driverName && w.driverName.toLowerCase().includes(currentUser.name.toLowerCase().split(' ')[0])) return true;
-      return false;
-    });
-    setWaybills(myWaybills.length > 0 ? myWaybills : allWaybills); // Fall back to all if none specifically assigned yet for demo
-
     const drivers = StorageManager.getDrivers();
-    const prof = drivers.find((d) => d.id === currentUser.driverId || d.name.toLowerCase().includes(currentUser.name.toLowerCase().split(' ')[0]));
+    const myName = currentUser.name.trim().toLowerCase();
+
+    // Профиль водителя: по driverId, иначе по точному совпадению ФИО
+    // (раньше сравнивалось только первое слово через includes — «Ян» находил «Иван»).
+    const prof =
+      drivers.find((d) => currentUser.driverId && d.id === currentUser.driverId) ||
+      drivers.find((d) => d.name.trim().toLowerCase() === myName);
     setDriverProfile(prof || null);
+
+    // Водитель видит только свои накладные. Раньше при отсутствии назначенных рейсов
+    // показывались накладные всех водителей, и их можно было переводить в «в пути».
+    // Администратору (режим просмотра роли) остаётся полный список.
+    if (currentUser.role === 'admin') {
+      setWaybills(allWaybills);
+      return;
+    }
+    const driverId = currentUser.driverId || prof?.id;
+    setWaybills(
+      allWaybills.filter((w) => {
+        if (driverId && w.driverId === driverId) return true;
+        // Для накладных без driverId — совпадение по ФИО в начале «Имя (авто госномер)»
+        const assigned = (w.driverName || '').trim().toLowerCase();
+        return !w.driverId && !!assigned && (assigned === myName || assigned.startsWith(`${myName} (`));
+      })
+    );
   };
 
   useEffect(() => {

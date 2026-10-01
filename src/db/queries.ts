@@ -24,6 +24,27 @@ import {
   INITIAL_DRIVERS,
 } from '../services/mockData.ts';
 
+/** Дата из БД (ISO-строка или Date) → ISO-строка. */
+function toIso(value: unknown): string | undefined {
+  if (!value) return undefined;
+  const date = value instanceof Date ? value : new Date(String(value));
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+/** JSON-колонка → массив (значение уже может быть распарсено слоем БД). */
+function asArray<T = any>(value: unknown): T[] {
+  if (Array.isArray(value)) return value as T[];
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
 export const INITIAL_TENANT_ACCOUNTS = [
   {
     id: 'acc-aroma',
@@ -167,7 +188,10 @@ export async function seedDatabaseIfEmpty() {
           name: emp.name,
           role: emp.role,
           pointId: emp.pointId || null,
+          workshopId: emp.workshopId || null,
+          driverId: emp.driverId || null,
           phone: emp.phone || null,
+          email: emp.email || null,
           archived: emp.archived,
         }).onConflictDoNothing();
       }
@@ -175,7 +199,7 @@ export async function seedDatabaseIfEmpty() {
       // Slots
       for (const slot of INITIAL_SLOTS) {
         await db.insert(slots).values({
-          id: slot.id,
+          id: slotRowId('acc-aroma', slot.id),
           accountId: 'acc-aroma',
           name: slot.name,
           deadlineTime: slot.deadlineTime,
@@ -242,7 +266,7 @@ export async function getTenantAccountsQuery() {
       adminEmail: a.adminEmail,
       adminName: a.adminName,
       description: a.description,
-      createdAt: a.createdAt ? a.createdAt.toISOString() : undefined,
+      createdAt: toIso(a.createdAt),
     }));
   } catch (error) {
     console.error('Database query failed (getTenantAccountsQuery):', error);
@@ -293,7 +317,7 @@ export async function getPointsQuery(accountId?: string) {
       address: p.address,
       legalEntityId: p.legalEntityId || '',
       assignedWorkshopId: p.assignedWorkshopId || '',
-      assignedEmployeeIds: JSON.parse(p.assignedEmployeeIds || '[]'),
+      assignedEmployeeIds: asArray(p.assignedEmployeeIds),
       source: p.source as 'manual' | 'external',
       external_id: p.externalId,
       archived: p.archived,
@@ -412,6 +436,7 @@ export async function getEmployeesQuery(accountId?: string) {
       workshopId: e.workshopId || undefined,
       driverId: e.driverId || undefined,
       phone: e.phone || undefined,
+      email: e.email || undefined,
       archived: e.archived,
     }));
   } catch (error) {
@@ -432,6 +457,7 @@ export async function upsertEmployeeQuery(emp: any) {
         workshopId: emp.workshopId || null,
         driverId: emp.driverId || null,
         phone: emp.phone || null,
+        email: emp.email || null,
         archived: emp.archived || false,
       })
       .onConflictDoUpdate({
@@ -444,6 +470,7 @@ export async function upsertEmployeeQuery(emp: any) {
           workshopId: emp.workshopId || null,
           driverId: emp.driverId || null,
           phone: emp.phone || null,
+          email: emp.email || null,
           archived: emp.archived || false,
         },
       });
@@ -454,16 +481,21 @@ export async function upsertEmployeeQuery(emp: any) {
 }
 
 // Slots queries (guarantee both morning and evening slots are always returned)
+// Первичный ключ таблицы — id, а id слота у всех аккаунтов одинаковый ('morning'/'evening'),
+// поэтому в БД строка хранится под ключом `${accountId}:${slotId}`. Старые строки с «голым»
+// id по-прежнему читаются (их accountId уже записан в строке).
+const slotRowId = (accountId: string, slotId: string) => `${accountId}:${slotId}`;
+
 export async function getSlotsQuery(accountId?: string) {
+  const scope = accountId && accountId !== 'all' ? accountId : 'acc-aroma';
   try {
-    const list = await db.select().from(slots);
-    
+    const list = await db.select().from(slots).where(eq(slots.accountId, scope));
     // Map with default slots (morning and evening)
     const slotMap = new Map<string, any>();
     INITIAL_SLOTS.forEach((s) => {
       slotMap.set(s.id, {
         id: s.id,
-        accountId: accountId || 'acc-aroma',
+        accountId: scope,
         name: s.name,
         deadlineTime: s.deadlineTime,
         deliveryTime: s.deliveryTime,
@@ -471,12 +503,16 @@ export async function getSlotsQuery(accountId?: string) {
         isActive: s.isActive,
       });
     });
-
-    // Overlay database values
-    list.forEach((s: any) => {
-      slotMap.set(s.id, {
-        id: s.id as 'morning' | 'evening',
-        accountId: s.accountId || accountId || 'acc-aroma',
+    // Overlay database values: сначала старые строки, затем новые (с префиксом аккаунта)
+    const prefix = `${scope}:`;
+    const ordered = [...list].sort(
+      (a: any, b: any) => Number(String(a.id).startsWith(prefix)) - Number(String(b.id).startsWith(prefix))
+    );
+    ordered.forEach((s: any) => {
+      const slotId = String(s.id).startsWith(prefix) ? String(s.id).slice(prefix.length) : s.id;
+      slotMap.set(slotId, {
+        id: slotId as 'morning' | 'evening',
+        accountId: scope,
         name: s.name,
         deadlineTime: s.deadlineTime,
         deliveryTime: s.deliveryTime,
@@ -484,36 +520,29 @@ export async function getSlotsQuery(accountId?: string) {
         isActive: s.isActive,
       });
     });
-
     return Array.from(slotMap.values());
   } catch (error) {
     console.error('Database query failed (getSlotsQuery):', error);
-    return INITIAL_SLOTS;
+    return INITIAL_SLOTS.map((s) => ({ ...s, accountId: scope }));
   }
 }
 
 export async function upsertSlotQuery(slot: any) {
   try {
+    const accountId = slot.accountId || 'acc-aroma';
+    const fields = {
+      accountId,
+      name: slot.name,
+      deadlineTime: slot.deadlineTime,
+      deliveryTime: slot.deliveryTime,
+      description: slot.description,
+      isActive: slot.isActive !== undefined ? slot.isActive : true,
+    };
     await db.insert(slots)
-      .values({
-        id: slot.id,
-        accountId: slot.accountId || 'acc-aroma',
-        name: slot.name,
-        deadlineTime: slot.deadlineTime,
-        deliveryTime: slot.deliveryTime,
-        description: slot.description,
-        isActive: slot.isActive !== undefined ? slot.isActive : true,
-      })
+      .values({ id: slotRowId(accountId, slot.id), ...fields })
       .onConflictDoUpdate({
         target: slots.id,
-        set: {
-          accountId: slot.accountId || 'acc-aroma',
-          name: slot.name,
-          deadlineTime: slot.deadlineTime,
-          deliveryTime: slot.deliveryTime,
-          description: slot.description,
-          isActive: slot.isActive !== undefined ? slot.isActive : true,
-        },
+        set: fields,
       });
   } catch (error) {
     console.error('Database query failed (upsertSlotQuery):', error);
@@ -537,11 +566,11 @@ export async function getOrdersQuery(accountId?: string) {
       slotId: o.slotId as 'morning' | 'evening',
       date: o.date,
       status: o.status as 'draft' | 'submitted' | 'aggregated',
-      items: JSON.parse(o.items || '[]'),
+      items: asArray(o.items),
       createdBy: o.createdBy,
-      createdAt: o.createdAt ? o.createdAt.toISOString() : new Date().toISOString(),
-      updatedAt: o.updatedAt ? o.updatedAt.toISOString() : new Date().toISOString(),
-      submittedAt: o.submittedAt ? o.submittedAt.toISOString() : undefined,
+      createdAt: (toIso(o.createdAt) ?? new Date().toISOString()),
+      updatedAt: (toIso(o.updatedAt) ?? new Date().toISOString()),
+      submittedAt: toIso(o.submittedAt),
     }));
   } catch (error) {
     console.error('Database query failed (getOrdersQuery):', error);
@@ -572,11 +601,11 @@ export async function findOrderByKeyQuery(idempotencyKey: string, accountId?: st
       slotId: o.slotId as 'morning' | 'evening',
       date: o.date,
       status: o.status as 'draft' | 'submitted' | 'aggregated',
-      items: JSON.parse(o.items || '[]'),
+      items: asArray(o.items),
       createdBy: o.createdBy,
-      createdAt: o.createdAt ? o.createdAt.toISOString() : new Date().toISOString(),
-      updatedAt: o.updatedAt ? o.updatedAt.toISOString() : new Date().toISOString(),
-      submittedAt: o.submittedAt ? o.submittedAt.toISOString() : undefined,
+      createdAt: (toIso(o.createdAt) ?? new Date().toISOString()),
+      updatedAt: (toIso(o.updatedAt) ?? new Date().toISOString()),
+      submittedAt: toIso(o.submittedAt),
     };
   } catch (error) {
     console.error('Database query failed (findOrderByKeyQuery):', error);
@@ -640,11 +669,11 @@ export async function getWaybillsQuery(accountId?: string) {
       workshopId: w.workshopId || undefined,
       legalEntityId: w.legalEntityId || undefined,
       dispatchedBy: w.dispatchedBy || undefined,
-      dispatchedAt: w.dispatchedAt ? w.dispatchedAt.toISOString() : undefined,
+      dispatchedAt: toIso(w.dispatchedAt),
       receivedBy: w.receivedBy || undefined,
-      receivedAt: w.receivedAt ? w.receivedAt.toISOString() : undefined,
-      items: JSON.parse(w.items || '[]'),
-      createdAt: w.createdAt ? w.createdAt.toISOString() : new Date().toISOString(),
+      receivedAt: toIso(w.receivedAt),
+      items: asArray(w.items),
+      createdAt: (toIso(w.createdAt) ?? new Date().toISOString()),
     }));
   } catch (error) {
     console.error('Database query failed (getWaybillsQuery):', error);
@@ -725,7 +754,7 @@ export async function getLegalEntitiesQuery(accountId?: string) {
       source: le.source as 'manual' | 'external',
       external_id: le.externalId,
       archived: le.archived,
-      createdAt: le.createdAt ? le.createdAt.toISOString() : undefined,
+      createdAt: toIso(le.createdAt),
     }));
   } catch (error) {
     console.error('Database query failed (getLegalEntitiesQuery):', error);
@@ -807,7 +836,7 @@ export async function getWorkshopsQuery(accountId?: string) {
       source: w.source as 'manual' | 'external',
       external_id: w.externalId,
       archived: w.archived,
-      createdAt: w.createdAt ? w.createdAt.toISOString() : undefined,
+      createdAt: toIso(w.createdAt),
     }));
   } catch (error) {
     console.error('Database query failed (getWorkshopsQuery):', error);
@@ -871,7 +900,7 @@ export async function getDriversQuery(accountId?: string) {
       hasRefrigerator: d.hasRefrigerator,
       status: d.status as 'active' | 'on_route' | 'day_off',
       archived: d.archived,
-      createdAt: d.createdAt ? d.createdAt.toISOString() : undefined,
+      createdAt: toIso(d.createdAt),
     }));
   } catch (error) {
     console.error('Database query failed (getDriversQuery):', error);

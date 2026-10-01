@@ -115,27 +115,53 @@ export async function ensureYdbSchema() {
   }
 }
 
+/**
+ * Все колонки в YDB хранятся как Utf8, поэтому на запись любое значение
+ * приводится к строке: Date → ISO, boolean → 'true'/'false', number → строка,
+ * объекты и массивы → JSON. null остаётся NULL.
+ */
 export function toYdbRow(input: Record<string, unknown>) {
-  return Object.fromEntries(Object.entries(input).map(([key, value]) => [key.replace(/[A-Z]/g, (match) => `_${match.toLowerCase()}`), typeof value === 'object' && value !== null ? JSON.stringify(value) : value]));
+  return Object.fromEntries(Object.entries(input).map(([key, value]) => {
+    let encoded: unknown = value;
+    if (value instanceof Date) encoded = value.toISOString();
+    else if (typeof value === 'boolean' || typeof value === 'number' || typeof value === 'bigint') encoded = String(value);
+    else if (typeof value === 'object' && value !== null) encoded = JSON.stringify(value);
+    return [key.replace(/[A-Z]/g, (match) => `_${match.toLowerCase()}`), encoded];
+  }));
 }
 
-function decodeYdbValue(value: unknown): unknown {
-  if (typeof value !== 'string') return value;
-  if (value === 'true') return true;
-  if (value === 'false') return false;
-  if (value === 'null') return null;
-  if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
+// Колонки, в которых лежит JSON и булевы значения. Остальное — всегда строки:
+// ИНН, КПП, телефоны, расчётные счета и SKU нельзя превращать в числа
+// (теряются ведущие нули и точность для 20-значных счетов).
+const JSON_COLUMNS = new Set(['items', 'assigned_employee_ids']);
+const BOOL_COLUMNS = new Set(['archived', 'has_refrigerator', 'is_active']);
+
+function decodeYdbValue(column: string, value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  if (BOOL_COLUMNS.has(column)) return value === true || value === 'true';
+  if (JSON_COLUMNS.has(column)) {
+    if (typeof value !== 'string') return value;
+    try {
+      return JSON.parse(value);
+    } catch {
+      return [];
+    }
   }
+  // Совместимость со старыми строками, где дата была записана как JSON-строка в кавычках.
+  if (column.endsWith('_at') && typeof value === 'string' && value.startsWith('"')) {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  }
+  return value;
 }
 
 export function fromYdbRow<T>(row: Record<string, unknown>): T {
-  return Object.fromEntries(Object.entries(row).map(([key, value]) => [
-    key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase()),
-    decodeYdbValue(value),
+  return Object.fromEntries(Object.entries(row).map(([column, value]) => [
+    column.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase()),
+    decodeYdbValue(column, value),
   ])) as T;
 }
 

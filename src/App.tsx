@@ -56,6 +56,16 @@ export default function App() {
 
   const [currentSlotId, setCurrentSlotId] = useState<SlotId>('morning');
 
+  // Ошибки сохранения на сервере (ApiService.save* больше не глотают их молча)
+  const [syncError, setSyncError] = useState<string | null>(null);
+  useEffect(() => {
+    const handleSyncError = (event: Event) => {
+      setSyncError((event as CustomEvent).detail?.message || 'Ошибка синхронизации с сервером.');
+    };
+    window.addEventListener('coffee-sync-error', handleSyncError);
+    return () => window.removeEventListener('coffee-sync-error', handleSyncError);
+  }, []);
+
   // Check pending aggregations for operator notification badge
   const [hasNewAggregatedOrder, setHasNewAggregatedOrder] = useState<boolean>(false);
 
@@ -154,6 +164,15 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#f4f5f2] flex flex-col text-slate-900 font-sans selection:bg-emerald-200">
+      {syncError && (
+        <div role="alert" className="sticky top-0 z-50 flex items-start justify-between gap-3 border-b border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
+          <span>{syncError}</span>
+          <button type="button" onClick={() => setSyncError(null)} className="shrink-0 font-bold text-rose-700 hover:text-rose-900" aria-label="Закрыть уведомление">
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Main Header with Role & Point switchers */}
       <Header
         currentRole={currentRole}

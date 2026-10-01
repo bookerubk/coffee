@@ -8,7 +8,7 @@ import {
   CoffeePoint,
 } from '../../types';
 import { StorageManager } from '../../services/storage';
-import { ApiService, isSlotDeadlinePassed, getSlotDeadlineDetails, syncServerTime } from '../../services/api';
+import { ApiService, getSlotDeadlineDetails, getOperationalTimeParts, syncServerTime } from '../../services/api';
 import { SavingOverlayModal } from './SavingOverlayModal';
 import {
   Plus,
@@ -23,6 +23,9 @@ import {
   Lock,
   Sparkles,
 } from 'lucide-react';
+
+// Верхняя граница количества одной позиции (совпадает с проверкой на сервере)
+const MAX_ORDER_QUANTITY = 1_000_000;
 
 interface OrderCreationViewProps {
   currentPoint: CoffeePoint;
@@ -59,6 +62,8 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
   // Timeout controller ref
   const abortControllerRef = useRef<AbortController | null>(null);
   const timeoutIdRef = useRef<any>(null);
+  // Что именно пользователь пытался сделать (черновик или отправка) — нужно для «Повторить»
+  const lastSubmitIsDraftRef = useRef<boolean>(false);
 
   // Slots state synchronized with storage and API
   const [slots, setSlots] = useState<SlotConfig[]>(() => StorageManager.getSlots());
@@ -69,6 +74,8 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
     syncServerTime();
     const handleStorage = () => {
       setSlots(StorageManager.getSlots());
+      // Каталог приходит с сервера уже после первой отрисовки — обновляем и его
+      setProducts(StorageManager.getProducts().filter((p) => !p.archived));
     };
     window.addEventListener('coffee-storage-change', handleStorage);
     const interval = setInterval(() => {
@@ -156,7 +163,7 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
 
     setQuantities((prev) => {
       const current = prev[productId] || 0;
-      const next = Math.max(0, Math.floor(current + delta));
+      const next = Math.min(MAX_ORDER_QUANTITY, Math.max(0, Math.floor(current + delta)));
       return { ...prev, [productId]: next };
     });
     setHasUnsavedChanges(true);
@@ -169,7 +176,7 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
     const val = sanitized === '' ? 0 : parseInt(sanitized, 10);
     setQuantities((prev) => ({
       ...prev,
-      [productId]: Math.max(0, val),
+      [productId]: Math.min(MAX_ORDER_QUANTITY, Math.max(0, val)),
     }));
     setHasUnsavedChanges(true);
   };
@@ -249,6 +256,7 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
 
   // Section 4.2: Critical Save / Submit Handler
   const executeSubmission = async (isDraft: boolean) => {
+    lastSubmitIsDraftRef.current = isDraft;
     // 1. Immediately (synchronously, before await) activate blocking overlay & disable buttons
     setSaveState('SAVING');
     setSaveErrorMessage('');
@@ -265,7 +273,9 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
     }, 12000);
 
     const payloadItems = buildPayloadItems();
-    const today = new Date().toISOString().split('T')[0];
+    // Дата заказа — по операционному часовому поясу (МСК), а не по UTC и часам устройства:
+    // ночью (00:00–03:00 МСК) UTC-дата ещё «вчерашняя», и вечерние заявки попадали не в тот день.
+    const today = getOperationalTimeParts().dateString;
 
     try {
       const response = await ApiService.submitOrder(
@@ -321,13 +331,14 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
 
   // Action: Retry with SAME idempotency key (Section 4.2)
   const handleRetry = () => {
-    executeSubmission(false);
+    // Раньше «Повторить» после неудачного сохранения черновика отправляла заявку как финальную
+    executeSubmission(lastSubmitIsDraftRef.current);
   };
 
   // Action: Save locally to localStorage (Section 4.2)
   const handleSaveLocally = () => {
     const payloadItems = buildPayloadItems();
-    StorageManager.saveLocalBackup(currentPoint.id, currentSlotId, {
+    const saved = StorageManager.saveLocalBackup(currentPoint.id, currentSlotId, {
       idempotencyKey,
       pointId: currentPoint.id,
       slotId: currentSlotId,
@@ -336,7 +347,9 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
     });
     setSaveState('IDLE');
     setNotification({
-      message: 'Заявка сохранена в локальное хранилище браузера. Вы сможете отправить её, когда восстановится связь.',
+      message: saved
+        ? 'Заявка сохранена в локальное хранилище браузера. Вы сможете отправить её, когда восстановится связь.'
+        : 'Не удалось сохранить заявку в браузере (хранилище недоступно или переполнено). Не закрывайте страницу и повторите отправку.',
       type: 'info',
     });
     setTimeout(() => setNotification(null), 5000);

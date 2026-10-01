@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { ShiftOrder, SlotId, ProductItem, CoffeePoint, Waybill } from '../../types';
 import { StorageManager } from '../../services/storage';
-import { ApiService } from '../../services/api';
+import { ApiService, getOperationalTimeParts } from '../../services/api';
 import {
   Layers,
   FileCheck,
@@ -27,9 +27,8 @@ export const AggregatedOrdersView: React.FC<AggregatedOrdersViewProps> = ({
   workshopName,
 }) => {
   const [selectedSlot, setSelectedSlot] = useState<SlotId>('morning');
-  const [selectedDate, setSelectedDate] = useState<string>(
-    () => new Date().toISOString().split('T')[0]
-  );
+  // Текущая дата в операционном часовом поясе (МСК), а не в UTC
+  const [selectedDate, setSelectedDate] = useState<string>(() => getOperationalTimeParts().dateString);
   const [orders, setOrders] = useState<ShiftOrder[]>([]);
   const [points, setPoints] = useState<CoffeePoint[]>([]);
   const [products, setProducts] = useState<ProductItem[]>([]);
@@ -127,7 +126,7 @@ export const AggregatedOrdersView: React.FC<AggregatedOrdersViewProps> = ({
   const handleGenerateWaybills = async () => {
     setIsGenerating(true);
     try {
-      const generated = await ApiService.generateWaybillsForSlot(selectedDate, selectedSlot);
+      const generated = await ApiService.generateWaybillsForSlot(selectedDate, selectedSlot, workshopId);
       loadData();
       setNotification(`Сформировано ${generated.length} накладных по точкам! Переходим к комплектации.`);
       setTimeout(() => {

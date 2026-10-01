@@ -38,14 +38,40 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 app.use(express.json({ limit: '15mb' }));
 
-// Helper to get active tenant account id
+const ACCOUNT_ID_RE = /^[a-zA-Z0-9_-]{2,64}$/;
+const SLOT_IDS = new Set(['morning', 'evening']);
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const TRANSIT_REASONS = new Set(['not_delivered', 'damaged', 'spoiled', 'shortage', 'other']);
+const MAX_QUANTITY = 1_000_000;
+const MAX_PHOTO_LENGTH = 3_000_000; // ~2 МБ в base64
+
+// Helper to get active tenant account id (приоритет: заголовок > query > body)
 const getAccountId = (req: express.Request): string => {
-  return (
+  const candidate =
     (req.headers['x-account-id'] as string) ||
     (req.query.accountId as string) ||
     (req.body && req.body.accountId) ||
-    'acc-aroma'
-  );
+    'acc-aroma';
+  return typeof candidate === 'string' && ACCOUNT_ID_RE.test(candidate) ? candidate : 'acc-aroma';
+};
+
+const isValidQuantity = (value: unknown): value is number =>
+  Number.isInteger(value) && (value as number) >= 0 && (value as number) <= MAX_QUANTITY;
+
+/** Бросается из обработчиков, чтобы вернуть клиенту понятную ошибку 4xx. */
+// (поле объявлено явно: `node server.ts` работает в strip-only режиме без parameter properties)
+class HttpError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+const sendError = (res: express.Response, error: any, fallback: string) => {
+  if (error instanceof HttpError) return res.status(error.status).json({ error: error.message });
+  console.error(fallback, error);
+  return res.status(500).json({ error: error?.message || fallback });
 };
 
 // Health / database check
@@ -121,8 +147,11 @@ app.get('/api/accounts', async (req, res) => {
 app.post('/api/accounts', async (req, res) => {
   try {
     const account = req.body;
-    if (!account.id || !account.name) {
+    if (!account || !account.id || !account.name) {
       return res.status(400).json({ error: 'Необходимо указать ID и название аккаунта' });
+    }
+    if (!ACCOUNT_ID_RE.test(String(account.id))) {
+      return res.status(400).json({ error: 'ID аккаунта: 2–64 символа, только латиница, цифры, «-» и «_».' });
     }
     await upsertTenantAccountQuery(account);
     res.json({ success: true, account });
@@ -185,7 +214,7 @@ app.get('/api/legal-entities', async (req, res) => {
 app.post('/api/legal-entities', async (req, res) => {
   try {
     const accountId = getAccountId(req);
-    await upsertLegalEntityQuery({ ...req.body, accountId: req.body.accountId || accountId });
+    await upsertLegalEntityQuery({ ...req.body, accountId });
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Error saving legal entity' });
@@ -206,7 +235,7 @@ app.get('/api/workshops', async (req, res) => {
 app.post('/api/workshops', async (req, res) => {
   try {
     const accountId = getAccountId(req);
-    await upsertWorkshopQuery({ ...req.body, accountId: req.body.accountId || accountId });
+    await upsertWorkshopQuery({ ...req.body, accountId });
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Error saving workshop' });
@@ -227,7 +256,7 @@ app.get('/api/drivers', async (req, res) => {
 app.post('/api/drivers', async (req, res) => {
   try {
     const accountId = getAccountId(req);
-    await upsertDriverQuery({ ...req.body, accountId: req.body.accountId || accountId });
+    await upsertDriverQuery({ ...req.body, accountId });
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Error saving driver' });
@@ -248,7 +277,7 @@ app.get('/api/points', async (req, res) => {
 app.post('/api/points', async (req, res) => {
   try {
     const accountId = getAccountId(req);
-    await upsertPointQuery({ ...req.body, accountId: req.body.accountId || accountId });
+    await upsertPointQuery({ ...req.body, accountId });
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Error saving point' });
@@ -269,7 +298,7 @@ app.get('/api/products', async (req, res) => {
 app.post('/api/products', async (req, res) => {
   try {
     const accountId = getAccountId(req);
-    await upsertProductQuery({ ...req.body, accountId: req.body.accountId || accountId });
+    await upsertProductQuery({ ...req.body, accountId });
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Error saving product' });
@@ -290,7 +319,7 @@ app.get('/api/employees', async (req, res) => {
 app.post('/api/employees', async (req, res) => {
   try {
     const accountId = getAccountId(req);
-    await upsertEmployeeQuery({ ...req.body, accountId: req.body.accountId || accountId });
+    await upsertEmployeeQuery({ ...req.body, accountId });
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Error saving employee' });
@@ -311,7 +340,7 @@ app.get('/api/slots', async (req, res) => {
 app.post('/api/slots', async (req, res) => {
   try {
     const accountId = getAccountId(req);
-    await upsertSlotQuery({ ...req.body, accountId: req.body.accountId || accountId });
+    await upsertSlotQuery({ ...req.body, accountId });
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Error saving slot' });
@@ -344,27 +373,41 @@ app.get('/api/orders/previous/:pointId', async (req, res) => {
 
 app.post('/api/orders', async (req, res) => {
   try {
-    const payload = req.body;
-    const accountId = payload.accountId || getAccountId(req);
+    const payload = req.body ?? {};
+    const accountId = getAccountId(req);
+    const isDraft = Boolean(payload.isDraft);
+
+    if (!payload.pointId || typeof payload.pointId !== 'string') {
+      throw new HttpError(400, 'Не указана точка заказа.');
+    }
+    if (!SLOT_IDS.has(payload.slotId)) throw new HttpError(400, 'Некорректный слот поставки.');
+    if (!DATE_RE.test(String(payload.date))) throw new HttpError(400, 'Некорректная дата заказа.');
+    if (!Array.isArray(payload.items)) throw new HttpError(400, 'Список позиций заказа обязателен.');
 
     // Validate non-negative integers
-    for (const it of payload.items || []) {
-      if (!Number.isInteger(it.quantity) || it.quantity < 0) {
-        return res.status(400).json({
-          error: `Количество товара "${it.name}" должно быть целым неотрицательным числом.`,
-        });
+    for (const it of payload.items) {
+      if (!isValidQuantity(it?.quantity)) {
+        throw new HttpError(400, `Количество товара "${it?.name}" должно быть целым числом от 0 до ${MAX_QUANTITY}.`);
       }
     }
+    const items = payload.items.filter((it: any) => it.quantity > 0);
+    if (!isDraft && items.length === 0) throw new HttpError(400, 'Нельзя отправить пустую заявку.');
 
-    // Check Idempotency Key in YDB
+    // Idempotency: повторный запрос с тем же ключом не создаёт дубль.
+    // Но черновик с этим ключом — не «уже отправленный заказ»: его нужно обновить
+    // (повторное сохранение) или превратить в отправленный (иначе заявка навсегда
+    // остаётся черновиком, хотя интерфейс сообщает об успешной отправке).
+    let existing: any = null;
     if (payload.idempotencyKey) {
-      const existing = await findOrderByKeyQuery(payload.idempotencyKey, accountId);
-      if (existing) {
+      existing = await findOrderByKeyQuery(payload.idempotencyKey, accountId);
+      if (existing && existing.status !== 'draft') {
         return res.json({ success: true, order: existing, isDuplicate: true });
       }
     }
 
-    const orderId = payload.orderId || `ord-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    // ID заказа всегда генерирует сервер: id — глобальный первичный ключ, и клиент
+    // не должен иметь возможности перезаписать чужой заказ, передав его id.
+    const orderId = existing?.id || `ord-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     const nowIso = new Date().toISOString();
 
     const order = {
@@ -375,24 +418,32 @@ app.post('/api/orders', async (req, res) => {
       pointName: payload.pointName,
       slotId: payload.slotId,
       date: payload.date,
-      status: payload.isDraft ? 'draft' : 'submitted',
-      items: (payload.items || []).filter((it: any) => it.quantity > 0),
+      status: isDraft ? 'draft' : 'submitted',
+      items,
       createdBy: payload.createdBy,
-      createdAt: nowIso,
+      createdAt: existing?.createdAt || nowIso,
       updatedAt: nowIso,
-      submittedAt: payload.isDraft ? null : nowIso,
+      submittedAt: isDraft ? null : nowIso,
     };
 
     await upsertOrderQuery(order);
 
     res.json({ success: true, order });
   } catch (error: any) {
-    console.error('Failed to submit order:', error);
-    res.status(500).json({ error: error.message || 'Failed to submit order to YDB' });
+    sendError(res, error, 'Failed to submit order');
   }
 });
 
 // Waybills (scoped to accountId)
+const FINISHED_WAYBILL = new Set(['received', 'received_with_discrepancies']);
+
+async function findWaybillOr404(accountId: string, id: string) {
+  const waybills = await getWaybillsQuery(accountId);
+  const waybill = waybills.find((w: any) => w.id === id);
+  if (!waybill) throw new HttpError(404, 'Waybill not found');
+  return waybill;
+}
+
 app.get('/api/waybills', async (req, res) => {
   try {
     const accountId = getAccountId(req);
@@ -405,87 +456,119 @@ app.get('/api/waybills', async (req, res) => {
 
 app.post('/api/waybills/generate', async (req, res) => {
   try {
-    const { date, slotId } = req.body;
-    const accountId = req.body.accountId || getAccountId(req);
+    const { date, slotId, workshopId } = req.body ?? {};
+    const accountId = getAccountId(req);
+    if (!DATE_RE.test(String(date))) throw new HttpError(400, 'Некорректная дата.');
+    if (!SLOT_IDS.has(slotId)) throw new HttpError(400, 'Некорректный слот.');
+
     const allOrders = await getOrdersQuery(accountId);
-    const slotOrders = allOrders.filter(
+    let slotOrders = allOrders.filter(
       (o: any) => o.date === date && o.slotId === slotId && o.status === 'submitted'
     );
 
-    const existingWaybills = await getWaybillsQuery(accountId);
-    const created: any[] = [];
+    // Оператор цеха формирует накладные только по точкам своего цеха
+    // (так же, как интерфейс показывает ему сводный заказ).
+    if (workshopId) {
+      const points = await getPointsQuery(accountId);
+      const workshopPointIds = new Set(
+        points.filter((p: any) => p.assignedWorkshopId === workshopId).map((p: any) => p.id)
+      );
+      if (workshopPointIds.size > 0) {
+        slotOrders = slotOrders.filter((o: any) => workshopPointIds.has(o.pointId));
+      }
+    }
+
+    // id накладной — глобальный первичный ключ, поэтому уникальность проверяем по всем аккаунтам.
+    const allWaybills = await getWaybillsQuery('all');
+    const existingWaybills = allWaybills.filter((w: any) => w.accountId === accountId);
+    const usedIds = new Set(allWaybills.map((w: any) => w.id));
+    const makeWaybillId = (pointId: string) => {
+      const base = `WB-${date.replace(/-/g, '')}-${slotId.charAt(0).toUpperCase()}-${pointId.replace(/[^a-zA-Z0-9]/g, '').slice(-4).toUpperCase()}`;
+      let id = base;
+      for (let n = 2; usedIds.has(id); n++) id = `${base}-${n}`;
+      usedIds.add(id);
+      return id;
+    };
 
     for (const ord of slotOrders) {
       const alreadyHas = existingWaybills.some((w: any) => w.orderId === ord.id);
-      if (!alreadyHas) {
-        const waybill = {
-          id: `WB-${date.replace(/-/g, '')}-${slotId.charAt(0).toUpperCase()}-${ord.pointId.replace(/[^a-zA-Z0-9]/g, '').slice(-4).toUpperCase()}`,
-          accountId,
-          orderId: ord.id,
-          pointId: ord.pointId,
-          pointName: ord.pointName,
-          date,
-          slotId,
-          status: 'formed',
-          createdAt: new Date().toISOString(),
-          items: ord.items.map((it: any) => ({
-            productId: it.productId,
-            sku: it.sku,
-            productName: it.name,
-            unit: it.unit,
-            category: it.category,
-            orderedQuantity: it.quantity,
-            dispatchedQuantity: it.quantity,
-          })),
-        };
+      if (alreadyHas) continue;
 
-        await upsertWaybillQuery(waybill);
-        created.push(waybill);
+      const waybill = {
+        id: makeWaybillId(ord.pointId),
+        accountId,
+        orderId: ord.id,
+        pointId: ord.pointId,
+        pointName: ord.pointName,
+        date,
+        slotId,
+        status: 'formed',
+        createdAt: new Date().toISOString(),
+        items: ord.items.map((it: any) => ({
+          productId: it.productId,
+          sku: it.sku,
+          productName: it.name,
+          unit: it.unit,
+          category: it.category,
+          orderedQuantity: it.quantity,
+          dispatchedQuantity: it.quantity,
+        })),
+      };
 
-        // Update order status to aggregated
-        ord.status = 'aggregated';
-        await upsertOrderQuery(ord);
-      }
+      await upsertWaybillQuery(waybill);
+
+      // Update order status to aggregated
+      await upsertOrderQuery({ ...ord, status: 'aggregated' });
     }
 
     const updatedList = await getWaybillsQuery(accountId);
     res.json(updatedList.filter((w: any) => w.date === date && w.slotId === slotId));
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error generating waybills' });
+    sendError(res, error, 'Error generating waybills');
   }
 });
 
 app.put('/api/waybills/:id/dispatch', async (req, res) => {
   try {
-    const { items, newStatus, operatorName, driverName, driverId, workshopId, legalEntityId } = req.body;
-    const accountId = req.body.accountId || getAccountId(req);
-    const waybills = await getWaybillsQuery(accountId);
-    const waybill = waybills.find((w: any) => w.id === req.params.id);
-    if (!waybill) return res.status(404).json({ error: 'Waybill not found' });
+    const { items, newStatus, operatorName, driverName, driverId, workshopId, legalEntityId } = req.body ?? {};
+    const accountId = getAccountId(req);
+    if (!Array.isArray(items)) throw new HttpError(400, 'Не переданы позиции накладной.');
+    if (!['formed', 'packing', 'dispatched'].includes(newStatus)) {
+      throw new HttpError(400, 'Недопустимый статус отгрузки.');
+    }
 
-    // Validate reason for production discrepancy
+    const waybill = await findWaybillOr404(accountId, req.params.id);
+    if (FINISHED_WAYBILL.has(waybill.status)) {
+      throw new HttpError(409, 'Накладная уже принята — изменить отгрузку нельзя.');
+    }
+    if (waybill.status === 'dispatched' && newStatus !== 'dispatched') {
+      throw new HttpError(409, 'Накладная уже отгружена — вернуть её в сборку нельзя.');
+    }
+
+    // Validate quantities and reason for production discrepancy
     for (const it of items) {
+      if (!isValidQuantity(it?.dispatchedQuantity)) {
+        throw new HttpError(400, 'Отгруженное количество должно быть целым неотрицательным числом.');
+      }
       const orig = waybill.items.find((x: any) => x.productId === it.productId);
       if (orig && orig.orderedQuantity !== it.dispatchedQuantity) {
-        if (!it.dispatchDiscrepancyReason || !it.dispatchDiscrepancyReason.trim()) {
-          return res.status(400).json({
-            error: `Укажите причину расхождения для "${orig.productName}".`,
-          });
+        if (!it.dispatchDiscrepancyReason || !String(it.dispatchDiscrepancyReason).trim()) {
+          throw new HttpError(400, `Укажите причину расхождения для "${orig.productName}".`);
         }
       }
     }
 
     waybill.items = waybill.items.map((orig: any) => {
       const updated = items.find((u: any) => u.productId === orig.productId);
-      if (updated) {
-        return {
-          ...orig,
-          dispatchedQuantity: updated.dispatchedQuantity,
-          dispatchDiscrepancyReason: updated.dispatchDiscrepancyReason,
-          receivedQuantity: orig.receivedQuantity !== undefined ? orig.receivedQuantity : updated.dispatchedQuantity,
-        };
-      }
-      return orig;
+      if (!updated) return orig;
+      return {
+        ...orig,
+        dispatchedQuantity: updated.dispatchedQuantity,
+        dispatchDiscrepancyReason: updated.dispatchDiscrepancyReason,
+        // До приёмки «принято» по умолчанию равно «отгружено». Раньше старое значение
+        // сохранялось даже после исправления отгрузки, и на приёмке появлялось ложное расхождение.
+        receivedQuantity: updated.dispatchedQuantity,
+      };
     });
 
     waybill.status = newStatus;
@@ -501,17 +584,23 @@ app.put('/api/waybills/:id/dispatch', async (req, res) => {
     await upsertWaybillQuery(waybill);
     res.json(waybill);
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error updating dispatch' });
+    sendError(res, error, 'Error updating dispatch');
   }
 });
 
 app.put('/api/waybills/:id/driver-status', async (req, res) => {
   try {
-    const { status, driverName, driverId } = req.body;
-    const accountId = req.body.accountId || getAccountId(req);
-    const waybills = await getWaybillsQuery(accountId);
-    const waybill = waybills.find((w: any) => w.id === req.params.id);
-    if (!waybill) return res.status(404).json({ error: 'Waybill not found' });
+    const { status, driverName, driverId } = req.body ?? {};
+    const accountId = getAccountId(req);
+    // Водитель может только начать рейс; приёмку и прочие статусы ему менять нельзя.
+    if (status !== undefined && status !== 'dispatched') {
+      throw new HttpError(400, 'Водитель может только перевести накладную в статус «Отгружена (в пути)».');
+    }
+
+    const waybill = await findWaybillOr404(accountId, req.params.id);
+    if (FINISHED_WAYBILL.has(waybill.status)) {
+      throw new HttpError(409, 'Накладная уже принята — статус рейса изменить нельзя.');
+    }
 
     if (driverName) waybill.driverName = driverName;
     if (driverId) waybill.driverId = driverId;
@@ -520,52 +609,63 @@ app.put('/api/waybills/:id/driver-status', async (req, res) => {
     await upsertWaybillQuery(waybill);
     res.json(waybill);
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error updating driver status' });
+    sendError(res, error, 'Error updating driver status');
   }
 });
 
 app.put('/api/waybills/:id/receive', async (req, res) => {
   try {
-    const { items, supervisorName } = req.body;
-    const accountId = req.body.accountId || getAccountId(req);
-    const waybills = await getWaybillsQuery(accountId);
-    const waybill = waybills.find((w: any) => w.id === req.params.id);
-    if (!waybill) return res.status(404).json({ error: 'Waybill not found' });
+    const { items, supervisorName } = req.body ?? {};
+    const accountId = getAccountId(req);
+    if (!Array.isArray(items)) throw new HttpError(400, 'Не переданы позиции приёмки.');
 
-    let hasDiscrepancy = false;
+    const waybill = await findWaybillOr404(accountId, req.params.id);
+    if (waybill.status !== 'dispatched') {
+      throw new HttpError(409, 'Принять можно только отгруженную накладную, которая ещё не принята.');
+    }
 
-    // Validate reasons
+    // Validate quantities and reasons
     for (const it of items) {
-      const orig = waybill.items.find((x: any) => x.productId === it.productId);
-      if (orig && orig.dispatchedQuantity !== it.receivedQuantity) {
-        hasDiscrepancy = true;
-        if (!it.receiveDiscrepancyReason) {
-          return res.status(400).json({
-            error: `Выберите причину расхождения для позиции "${orig.productName}".`,
-          });
+      const orig = waybill.items.find((x: any) => x.productId === it?.productId);
+      if (!orig) throw new HttpError(400, 'В приёмке указана позиция, которой нет в накладной.');
+      if (!isValidQuantity(it.receivedQuantity)) {
+        throw new HttpError(400, `Принятое количество для "${orig.productName}" должно быть целым неотрицательным числом.`);
+      }
+      if (orig.dispatchedQuantity !== it.receivedQuantity) {
+        if (!it.receiveDiscrepancyReason || !TRANSIT_REASONS.has(it.receiveDiscrepancyReason)) {
+          throw new HttpError(400, `Выберите причину расхождения для позиции "${orig.productName}".`);
         }
-        if (it.receiveDiscrepancyReason === 'other' && (!it.receiveDiscrepancyComment || !it.receiveDiscrepancyComment.trim())) {
-          return res.status(400).json({
-            error: `При выборе «Другое» обязателен комментарий для "${orig.productName}".`,
-          });
+        if (it.receiveDiscrepancyReason === 'other' && (!it.receiveDiscrepancyComment || !String(it.receiveDiscrepancyComment).trim())) {
+          throw new HttpError(400, `При выборе «Другое» обязателен комментарий для "${orig.productName}".`);
+        }
+        if (it.receiveDiscrepancyPhoto !== undefined && it.receiveDiscrepancyPhoto !== null && it.receiveDiscrepancyPhoto !== '') {
+          const photo = it.receiveDiscrepancyPhoto;
+          if (typeof photo !== 'string' || !photo.startsWith('data:image/')) {
+            throw new HttpError(400, `Фото для "${orig.productName}" должно быть изображением.`);
+          }
+          if (photo.length > MAX_PHOTO_LENGTH) {
+            throw new HttpError(413, `Фото для "${orig.productName}" слишком большое (максимум ~2 МБ).`);
+          }
         }
       }
     }
 
     waybill.items = waybill.items.map((orig: any) => {
       const updated = items.find((u: any) => u.productId === orig.productId);
-      if (updated) {
-        return {
-          ...orig,
-          receivedQuantity: updated.receivedQuantity,
-          receiveDiscrepancyReason: updated.receiveDiscrepancyReason,
-          receiveDiscrepancyComment: updated.receiveDiscrepancyComment,
-          receiveDiscrepancyPhoto: updated.receiveDiscrepancyPhoto,
-        };
-      }
-      return orig;
+      if (!updated) return orig;
+      return {
+        ...orig,
+        receivedQuantity: updated.receivedQuantity,
+        receiveDiscrepancyReason: updated.receiveDiscrepancyReason,
+        receiveDiscrepancyComment: updated.receiveDiscrepancyComment,
+        receiveDiscrepancyPhoto: updated.receiveDiscrepancyPhoto,
+      };
     });
 
+    // Расхождение считаем по всем позициям накладной, а не только по присланным
+    const hasDiscrepancy = waybill.items.some(
+      (i: any) => (i.receivedQuantity ?? i.dispatchedQuantity) !== i.dispatchedQuantity
+    );
     waybill.status = hasDiscrepancy ? 'received_with_discrepancies' : 'received';
     waybill.receivedAt = new Date().toISOString();
     waybill.receivedBy = supervisorName;
@@ -573,7 +673,7 @@ app.put('/api/waybills/:id/receive', async (req, res) => {
     await upsertWaybillQuery(waybill);
     res.json(waybill);
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error updating receive' });
+    sendError(res, error, 'Error updating receive');
   }
 });
 
@@ -585,6 +685,25 @@ app.post('/api/reset', async (req, res) => {
   } catch (error: any) {
     res.status(500).json({ error: error.message || 'Error resetting data' });
   }
+});
+
+// Неизвестные маршруты API — JSON 404 (а не index.html от SPA-fallback)
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: `Маршрут не найден: ${req.method} ${req.originalUrl}` });
+});
+
+// Ошибки парсинга/размера тела запроса — JSON вместо HTML-страницы Express
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (res.headersSent) return next(err);
+  const status = err?.status || err?.statusCode || 500;
+  const message =
+    status === 413
+      ? 'Слишком большой запрос (например, фото).'
+      : status < 500
+        ? 'Некорректный запрос.'
+        : 'Внутренняя ошибка сервера.';
+  if (status >= 500) console.error('Unhandled error:', err);
+  res.status(status).json({ error: message });
 });
 
 // Vite Middleware for Dev / Static for Prod
@@ -608,7 +727,7 @@ async function startServer() {
   const isProd = process.env.NODE_ENV === 'production';
   if (isProd) {
     app.use(express.static(path.resolve(__dirname, 'dist')));
-    app.get('*', (req, res) => {
+    app.get(/^(?!\/api\/).*/, (req, res) => {
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
     });
   } else {
