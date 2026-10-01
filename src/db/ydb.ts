@@ -3,7 +3,10 @@ import { Driver, QueryClient, IamAuthService, getCredentialsFromEnv } from 'ydb-
 function createYdbAuthService() {
   const serviceAccountId = process.env.YDB_SERVICE_ACCOUNT_ID;
   const keyId = process.env.YDB_KEY_ID;
-  const privateKey = process.env.YDB_PRIVATE_KEY?.replace(/\\n/g, '\n');
+  const privateKey = process.env.YDB_PRIVATE_KEY
+    ?.trim()
+    .replace(/^['"]|['"]$/g, '')
+    .replace(/\\n/g, '\n');
 
   const configuredKeyParts = [serviceAccountId, keyId, privateKey].filter(Boolean).length;
   if (configuredKeyParts > 0 && configuredKeyParts < 3) {
