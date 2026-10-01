@@ -1,11 +1,23 @@
-type YdbColumn = any;
+export type YdbType = 'Utf8' | 'Uint64' | 'Int64' | 'Bool' | 'Json';
+export type YdbColumn = { name: string; type: YdbType; table: YdbTable };
 type YdbTable = Record<string, YdbColumn> & { name: string };
+
+const UINT64_COLUMNS = new Set(['capacity']);
+const BOOL_COLUMNS = new Set(['archived', 'has_refrigerator', 'is_active']);
+const JSON_COLUMNS = new Set(['items', 'assigned_employee_ids']);
+
+function ydbTypeForColumn(column: string): YdbType {
+  if (UINT64_COLUMNS.has(column)) return 'Uint64';
+  if (BOOL_COLUMNS.has(column)) return 'Bool';
+  if (JSON_COLUMNS.has(column)) return 'Json';
+  return 'Utf8';
+}
 
 function ydbTable(name: string, columns: string[]) {
   const table = { name } as YdbTable;
   for (const column of columns) {
-    const camel = column.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
-    table[camel] = { name: camel, table };
+    const camel = column.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
+    table[camel] = { name: camel, type: ydbTypeForColumn(column), table };
   }
   return table;
 }
