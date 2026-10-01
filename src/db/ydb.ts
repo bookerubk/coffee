@@ -35,19 +35,9 @@ export function createYdbQueryClient() {
   return global._ydbQueryClient;
 }
 
-function yqlTypeFor(value: unknown) {
-  if (typeof value === 'boolean') return 'Bool';
-  if (typeof value === 'bigint') return 'Int64';
-  if (typeof value === 'number') return Number.isInteger(value) ? 'Int32' : 'Double';
-  return 'Utf8';
-}
-
 export async function executeYql<T = Record<string, unknown>>(text: string, parameters: Record<string, unknown> = {}) {
   const entries = Object.entries(parameters).filter(([, value]) => value !== undefined);
-  const declarations = entries
-    .map(([name, value]) => `DECLARE $${name} AS ${yqlTypeFor(value)};`)
-    .join('\n');
-  let request = createYdbQueryClient()(`${declarations}\n${text}`);
+  let request = createYdbQueryClient()(text);
   for (const [name, value] of entries) {
     request = request.param(name, fromJs(value as never));
   }
