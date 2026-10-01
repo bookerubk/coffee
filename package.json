@@ -13,7 +13,8 @@
     "ydb:check": "tsx scripts/ydb-check.ts",
     "ydb:schema": "tsx scripts/ydb-schema.ts",
     "ydb:seed": "tsx scripts/ydb-seed.ts",
-    "ydb:setup": "npm run ydb:check && npm run ydb:schema && npm run ydb:seed"
+    "ydb:setup": "npm run ydb:check && npm run ydb:schema && npm run ydb:seed",
+    "ydb:cloud": "npm run ydb:check && npm run ydb:schema"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
