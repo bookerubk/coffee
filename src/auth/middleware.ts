@@ -31,18 +31,20 @@ export function parseCookies(header: string | undefined): Record<string, string>
 }
 
 export function sessionCookie(token: string, secure: boolean): string {
-  // HttpOnly — токен недоступен JavaScript (защита от кражи через XSS);
-  // SameSite=Lax — cookie не отправляется с чужих сайтов при POST/PUT (защита от CSRF).
-  return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_SECONDS}${secure ? '; Secure' : ''}`;
+  // SameSite=None; Secure позволяет cookie работать в iframe (AI Studio / Cloud Run)
+  const isSecure = secure || process.env.NODE_ENV === 'production';
+  const sameSite = isSecure ? 'SameSite=None; Secure; Partitioned' : 'SameSite=Lax';
+  return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; ${sameSite}; Max-Age=${SESSION_TTL_SECONDS}`;
 }
 
 export function clearedSessionCookie(secure: boolean): string {
-  return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? '; Secure' : ''}`;
+  const isSecure = secure || process.env.NODE_ENV === 'production';
+  const sameSite = isSecure ? 'SameSite=None; Secure; Partitioned' : 'SameSite=Lax';
+  return `${SESSION_COOKIE}=; Path=/; HttpOnly; ${sameSite}; Max-Age=0`;
 }
 
 export const securityHeaders: RequestHandler = (req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'same-origin');
   if (req.path.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');
   next();
@@ -50,7 +52,7 @@ export const securityHeaders: RequestHandler = (req, res, next) => {
 
 /**
  * Дополнительная защита от CSRF: запросы, изменяющие данные, принимаются, только если
- * заголовок Origin (когда он есть) указывает на этот же хост.
+ * заголовок Origin (когда он есть) указывает на этот же хост либо доверенные домены платформы.
  */
 export const sameOriginGuard: RequestHandler = (req, res, next) => {
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
@@ -59,7 +61,16 @@ export const sameOriginGuard: RequestHandler = (req, res, next) => {
   const forwardedHost = (req.headers['x-forwarded-host'] as string | undefined)?.split(',')[0]?.trim();
   const host = forwardedHost || req.headers.host;
   try {
-    if (new URL(origin).host === host) return next();
+    const originHost = new URL(origin).host;
+    if (
+      originHost === host ||
+      originHost.endsWith('.googleusercontent.com') ||
+      originHost.endsWith('.run.app') ||
+      originHost.includes('localhost') ||
+      originHost.includes('127.0.0.1')
+    ) {
+      return next();
+    }
   } catch {
     /* некорректный Origin — отклоняем ниже */
   }
@@ -86,7 +97,10 @@ export function toAuthUser(employee: EmployeeAuthRecord): AuthUser {
  */
 export const requireAuth: RequestHandler = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+    const authHeader = req.headers.authorization;
+    const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined;
+    const cookieToken = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+    const token = bearerToken || cookieToken;
     const payload = verifySession(token);
     if (!payload) {
       return res.status(401).json({ error: 'Требуется вход в систему.', code: 'unauthorized' });

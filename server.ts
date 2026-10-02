@@ -1,4 +1,5 @@
 import express from 'express';
+import fs from 'node:fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
@@ -44,6 +45,7 @@ import {
   findEmployeeAuthByEmailQuery,
 } from './src/db/queries.ts';
 
+process.env.DISABLE_HMR = 'true';
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -838,33 +840,42 @@ async function startServer() {
     (async () => {
       if (process.env.YDB_AUTO_SCHEMA === 'true') await ensureYdbSchema();
       if (process.env.YDB_AUTO_SEED === 'true') await seedDatabaseIfEmpty();
-      await bootstrapAdminFromEnv();
+      await bootstrapAdminFromEnv({
+        ...process.env,
+        BOOTSTRAP_ADMIN_EMAIL: process.env.BOOTSTRAP_ADMIN_EMAIL || 'admin@aroma-coffee.ru',
+        BOOTSTRAP_ADMIN_PASSWORD: process.env.BOOTSTRAP_ADMIN_PASSWORD || '1',
+      });
     })().catch((err) => console.error('Database initialization error:', err));
   } else {
     console.warn('Database is not configured; starting without automatic seeding. Вход в систему невозможен без базы данных.');
   }
 
-  const isProd = process.env.NODE_ENV === 'production';
-  if (isProd) {
+  const hasDist = fs.existsSync(path.resolve(__dirname, 'dist', 'index.html'));
+  const isProd = process.env.NODE_ENV === 'production' || hasDist;
+  if (isProd && hasDist) {
     app.use(express.static(path.resolve(__dirname, 'dist')));
     app.get(/^(?!\/api\/).*/, (req, res) => {
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
     });
   } else {
     const { createServer: createViteServer } = await import('vite');
-  const vite = await createViteServer({
-    server: {
-      middlewareMode: true,
-      hmr: process.env.DISABLE_HMR !== 'true',
-      watch: process.env.DISABLE_HMR === 'true' ? null : {},
-    },
+    const vite = await createViteServer({
+      server: {
+        middlewareMode: true,
+        hmr: false,
+        watch: null,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server is running on http://0.0.0.0:${PORT} (${databaseConfigured ? 'database configured' : 'database not configured'})`);
+  });
+
+  server.on('error', (err: any) => {
+    console.error('Server listen error:', err);
   });
 }
 

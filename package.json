@@ -3,12 +3,12 @@
   "private": true,
   "version": "0.0.0",
   "engines": {
-    "node": ">=22.18"
+    "node": ">=20.0.0"
   },
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "start": "NODE_ENV=production node server.ts",
+    "start": "node server.ts",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",

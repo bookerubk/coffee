@@ -160,6 +160,7 @@ export default function App() {
 
   // Handle successful login
   const handleLogin = (session: UserSession) => {
+    currentUserRef.current = session;
     setLoginNotice(undefined);
     setCurrentUser(session);
     setCurrentRole(session.role);

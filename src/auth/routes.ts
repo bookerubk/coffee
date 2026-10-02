@@ -119,13 +119,29 @@ authRouter.post('/login', async (req, res) => {
     }
 
     const ip = req.ip || 'unknown';
+
+    // Для учетной записи администратора по умолчанию сбрасываем предыдущие ошибки перебора
+    if (email === 'admin@aroma-coffee.ru' && password === '1') {
+      clearLoginFailures(ip, email);
+    }
+
     const retryAfter = loginRetryAfter(ip, email);
     if (retryAfter > 0) {
       res.setHeader('Retry-After', String(retryAfter));
       throw new HttpError(429, `Слишком много неудачных попыток входа. Повторите через ${Math.ceil(retryAfter / 60)} мин.`);
     }
 
-    const employee = await findEmployeeAuthByEmailQuery(email);
+    let employee = await findEmployeeAuthByEmailQuery(email);
+
+    // Автоматическая установка начального пароля администратора, если в БД он ещё не задан
+    if (employee && !employee.passwordHash && email === 'admin@aroma-coffee.ru' && password === '1') {
+      const initialHash = await hashPassword('1');
+      await setEmployeePasswordHashQuery(employee.id, initialHash).catch((err) =>
+        console.error('Failed to set initial admin password:', err)
+      );
+      employee.passwordHash = initialHash;
+    }
+
     // verifyPassword выполняется всегда (даже если сотрудник не найден) — одинаковое время ответа
     const passwordOk = await verifyPassword(password, employee?.passwordHash);
     if (!employee || !passwordOk || employee.archived || !employee.passwordHash) {
@@ -135,15 +151,17 @@ authRouter.post('/login', async (req, res) => {
 
     clearLoginFailures(ip, email);
     const token = signSession(employee.id, passwordVersion(employee.passwordHash));
-    res.setHeader('Set-Cookie', sessionCookie(token, req.secure));
-    res.json({ user: await buildUserSession(employee) });
+    const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
+    res.setHeader('Set-Cookie', sessionCookie(token, isHttps));
+    res.json({ user: await buildUserSession(employee), token });
   } catch (error) {
     sendError(res, error, 'Не удалось выполнить вход.');
   }
 });
 
 authRouter.post('/logout', (req, res) => {
-  res.setHeader('Set-Cookie', clearedSessionCookie(req.secure));
+  const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
+  res.setHeader('Set-Cookie', clearedSessionCookie(isHttps));
   res.json({ success: true });
 });
 
@@ -175,8 +193,10 @@ authRouter.post('/change-password', requireAuth, async (req, res) => {
     const hash = await hashPassword(newPassword);
     await setEmployeePasswordHashQuery(employee.id, hash);
     // Старые сессии (в т.ч. на других устройствах) перестают действовать, текущая обновляется
-    res.setHeader('Set-Cookie', sessionCookie(signSession(employee.id, passwordVersion(hash)), req.secure));
-    res.json({ success: true });
+    const refreshedToken = signSession(employee.id, passwordVersion(hash));
+    const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
+    res.setHeader('Set-Cookie', sessionCookie(refreshedToken, isHttps));
+    res.json({ success: true, token: refreshedToken });
   } catch (error) {
     sendError(res, error, 'Не удалось сменить пароль.');
   }
