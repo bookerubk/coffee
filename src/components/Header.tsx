@@ -10,6 +10,7 @@ import {
   Truck,
   FileSpreadsheet,
   LogOut,
+  KeyRound,
   Database,
 } from 'lucide-react';
 
@@ -25,6 +26,7 @@ interface HeaderProps {
   hasNewAggregatedOrder: boolean;
   currentUser: UserSession | null;
   onLogout: () => void;
+  onChangePassword?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -39,6 +41,7 @@ export const Header: React.FC<HeaderProps> = ({
   hasNewAggregatedOrder,
   currentUser,
   onLogout,
+  onChangePassword,
 }) => {
   const isAdmin = currentUser?.role === 'admin';
   const [serverTime, setServerTime] = useState<string>('');
@@ -84,6 +87,12 @@ export const Header: React.FC<HeaderProps> = ({
                   <div className="truncate text-[10px] text-stone-500">{currentUser.role === 'admin' ? 'Администратор' : currentUser.role === 'shift_supervisor' ? 'Старший смены' : currentUser.role === 'production_operator' ? 'Оператор цеха' : 'Водитель'}</div>
                 </div>
               </div>
+            )}
+            {onChangePassword && (
+              <button onClick={onChangePassword} className="grid size-9 place-items-center rounded-xl border border-stone-200 bg-stone-50 text-stone-700 transition-colors hover:bg-amber-50 hover:text-amber-800" title="Сменить пароль">
+                <KeyRound className="size-4" />
+                <span className="sr-only">Сменить пароль</span>
+              </button>
             )}
             <button onClick={onLogout} className="grid size-9 place-items-center rounded-xl border border-stone-200 bg-stone-50 text-stone-700 transition-colors hover:bg-rose-50 hover:text-rose-700" title="Выйти">
               <LogOut className="size-4" />

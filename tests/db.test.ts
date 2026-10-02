@@ -1,6 +1,6 @@
 import { test, before, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { installFakeYdb, resetFakeYdb } from './fakeYdb.ts';
+import { createLegacyTable, installFakeYdb, resetFakeYdb } from './fakeYdb.ts';
 
 installFakeYdb();
 const { ensureYdbSchema } = await import('../src/db/ydb.ts');
@@ -90,4 +90,31 @@ test('seed: не затирает правки существующего акк
   assert.ok((await q.getPointsQuery('acc-aroma')).length > 0);
   assert.ok((await q.getOrdersQuery('acc-aroma')).length > 0);
   assert.ok((await q.getWaybillsQuery('acc-aroma')).length > 0);
+});
+
+test('миграция: колонка password_hash добавляется в существующую таблицу employees и сохраняет данные', async () => {
+  resetFakeYdb();
+  // «Старая» схема без password_hash, в таблице уже есть сотрудник
+  createLegacyTable('employees', ['id Utf8', 'account_id Utf8', 'created_at Utf8', 'updated_at Utf8', 'archived Utf8', 'name Utf8', 'role Utf8', 'point_id Utf8', 'workshop_id Utf8', 'driver_id Utf8', 'phone Utf8', 'email Utf8']);
+  const { upsertYdbRow } = await import('../src/db/ydb.ts');
+  await upsertYdbRow('employees', { id: 'old', account_id: 'acc-a', name: 'Старый', role: 'admin', email: 'old@a.test', archived: 'false' });
+
+  await ensureYdbSchema();
+  await ensureYdbSchema(); // повторный запуск безопасен
+
+  await q.setEmployeePasswordHashQuery('old', 'scrypt$1$2$3$a$b');
+  const found = await q.findEmployeeAuthByEmailQuery('OLD@a.test');
+  assert.equal(found?.id, 'old');
+  assert.equal(found?.passwordHash, 'scrypt$1$2$3$a$b');
+  assert.equal(found?.name, 'Старый'); // установка пароля не затёрла остальные поля
+});
+
+test('аутентификация: пароль не попадает в обычные выборки сотрудников', async () => {
+  await q.upsertEmployeeQuery({ id: 'e1', accountId: 'acc-a', name: 'А', role: 'admin', email: 'a@a.test', passwordHash: 'scrypt$secret' });
+  const [e] = await q.getEmployeesQuery('acc-a');
+  assert.equal(e.hasPassword, true);
+  assert.ok(!JSON.stringify(e).includes('scrypt'));
+  // Обычное редактирование без passwordHash не стирает пароль
+  await q.upsertEmployeeQuery({ id: 'e1', accountId: 'acc-a', name: 'А2', role: 'admin', email: 'a@a.test' });
+  assert.equal((await q.getEmployeeAuthByIdQuery('e1'))?.passwordHash, 'scrypt$secret');
 });

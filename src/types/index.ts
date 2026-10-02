@@ -134,6 +134,8 @@ export interface Employee {
   driverId?: string;
   phone?: string;
   email?: string;
+  /** Задан ли пароль для входа (сам пароль и его хэш клиенту не передаются). */
+  hasPassword?: boolean;
   archived: boolean;
 }
 

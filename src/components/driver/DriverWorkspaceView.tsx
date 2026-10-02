@@ -95,7 +95,14 @@ export const DriverWorkspaceView: React.FC<DriverWorkspaceViewProps> = ({ curren
       ...driverProfile,
       status: newStatus,
     };
-    await ApiService.saveDriver(updated);
+    try {
+      // Водитель меняет только статус своей смены, а не всю карточку (её правит администратор)
+      await ApiService.updateMyDriverStatus(newStatus);
+    } catch (err: any) {
+      alert(err.message || 'Не удалось обновить статус смены');
+      return;
+    }
+    StorageManager.saveDriver(updated);
     setDriverProfile(updated);
     showToast(`Статус смены изменен: ${newStatus === 'active' ? 'На смене' : newStatus === 'on_route' ? 'В рейсе' : 'Выходной'}`);
   };

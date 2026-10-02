@@ -103,15 +103,35 @@ export const YDB_TABLE_DEFINITIONS: Record<string, string[]> = {
   drivers: [...auditColumns, 'name Utf8', 'phone Utf8', 'legal_entity_id Utf8', 'assigned_workshop_id Utf8', 'vehicle_model Utf8', 'license_plate Utf8', 'has_refrigerator Utf8', 'status Utf8'],
   coffee_points: [...auditColumns, 'name Utf8', 'address Utf8', 'legal_entity_id Utf8', 'assigned_workshop_id Utf8', 'assigned_employee_ids Utf8', 'source Utf8', 'external_id Utf8'],
   products: [...auditColumns, 'sku Utf8', 'name Utf8', 'unit Utf8', 'category Utf8', 'source Utf8', 'external_id Utf8'],
-  employees: [...auditColumns, 'name Utf8', 'role Utf8', 'point_id Utf8', 'workshop_id Utf8', 'driver_id Utf8', 'phone Utf8', 'email Utf8'],
+  employees: [...auditColumns, 'name Utf8', 'role Utf8', 'point_id Utf8', 'workshop_id Utf8', 'driver_id Utf8', 'phone Utf8', 'email Utf8', 'password_hash Utf8'],
   slots: [...baseColumns, 'name Utf8', 'deadline_time Utf8', 'delivery_time Utf8', 'description Utf8', 'is_active Utf8'],
   shift_orders: [...baseColumns, 'updated_at Utf8', 'idempotency_key Utf8', 'point_id Utf8', 'point_name Utf8', 'slot_id Utf8', 'date Utf8', 'status Utf8', 'items Utf8', 'created_by Utf8', 'submitted_at Utf8'],
   waybills: [...baseColumns, 'order_id Utf8', 'point_id Utf8', 'point_name Utf8', 'date Utf8', 'slot_id Utf8', 'status Utf8', 'driver_name Utf8', 'driver_id Utf8', 'workshop_id Utf8', 'legal_entity_id Utf8', 'dispatched_by Utf8', 'dispatched_at Utf8', 'received_by Utf8', 'received_at Utf8', 'items Utf8'],
 };
 
+// Колонки, добавленные после первой версии схемы. CREATE TABLE IF NOT EXISTS не меняет уже
+// существующие таблицы, поэтому для них недостающие колонки добавляются отдельно.
+const MIGRATION_COLUMNS: Record<string, string[]> = {
+  employees: ['password_hash Utf8'],
+};
+
+export async function ensureYdbColumn(table: string, columnDefinition: string) {
+  const column = columnDefinition.split(' ')[0];
+  try {
+    await executeYql(`SELECT ${column} FROM \`${table}\` LIMIT 1;`);
+    return; // колонка уже есть
+  } catch {
+    // колонки нет (или таблица недоступна — тогда следующий запрос вернёт понятную ошибку)
+  }
+  await executeYql(`ALTER TABLE \`${table}\` ADD COLUMN ${columnDefinition};`);
+}
+
 export async function ensureYdbSchema() {
   for (const [table, columns] of Object.entries(YDB_TABLE_DEFINITIONS)) {
     await ensureYdbTable(table, columns);
+  }
+  for (const [table, columns] of Object.entries(MIGRATION_COLUMNS)) {
+    for (const column of columns) await ensureYdbColumn(table, column);
   }
 }
 

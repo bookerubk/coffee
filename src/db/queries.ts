@@ -1,4 +1,5 @@
 import { db, eq, desc, and } from './index.ts';
+import { fromYdbRow, selectYdbRows, upsertYdbRow } from './ydb.ts';
 import {
   coffeePoints,
   products,
@@ -437,6 +438,7 @@ export async function getEmployeesQuery(accountId?: string) {
       driverId: e.driverId || undefined,
       phone: e.phone || undefined,
       email: e.email || undefined,
+      hasPassword: Boolean(e.passwordHash),
       archived: e.archived,
     }));
   } catch (error) {
@@ -458,6 +460,7 @@ export async function upsertEmployeeQuery(emp: any) {
         driverId: emp.driverId || null,
         phone: emp.phone || null,
         email: emp.email || null,
+        passwordHash: emp.passwordHash || null,
         archived: emp.archived || false,
       })
       .onConflictDoUpdate({
@@ -472,11 +475,87 @@ export async function upsertEmployeeQuery(emp: any) {
           phone: emp.phone || null,
           email: emp.email || null,
           archived: emp.archived || false,
+          // Хэш пароля обновляем только если он передан: обычное редактирование сотрудника
+          // не должно сбрасывать пароль.
+          ...(emp.passwordHash ? { passwordHash: emp.passwordHash } : {}),
         },
       });
   } catch (error) {
     console.error('Database query failed (upsertEmployeeQuery):', error);
     throw new Error('Failed to upsert employee', { cause: error });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Аутентификация. Запросы ниже возвращают passwordHash — только для серверного кода,
+// наружу (в API) эти объекты отдавать нельзя.
+// ---------------------------------------------------------------------------
+export interface EmployeeAuthRecord {
+  id: string;
+  accountId: string;
+  name: string;
+  role: string;
+  email?: string;
+  pointId?: string;
+  workshopId?: string;
+  driverId?: string;
+  phone?: string;
+  archived: boolean;
+  passwordHash?: string;
+}
+
+function toAuthRecord(row: any): EmployeeAuthRecord {
+  return {
+    id: row.id,
+    accountId: row.accountId || 'acc-aroma',
+    name: row.name,
+    role: row.role,
+    email: row.email || undefined,
+    pointId: row.pointId || undefined,
+    workshopId: row.workshopId || undefined,
+    driverId: row.driverId || undefined,
+    phone: row.phone || undefined,
+    archived: row.archived === true || row.archived === 'true',
+    passwordHash: row.passwordHash || undefined,
+  };
+}
+
+export async function getEmployeeAuthByIdQuery(id: string): Promise<EmployeeAuthRecord | null> {
+  try {
+    const rows = await selectYdbRows('employees', { id });
+    return rows[0] ? toAuthRecord(fromYdbRow<any>(rows[0] as any)) : null;
+  } catch (error) {
+    console.error('Database query failed (getEmployeeAuthByIdQuery):', error);
+    throw new Error('Database query failed for employee auth', { cause: error });
+  }
+}
+
+/**
+ * Поиск сотрудника по email без учёта регистра (в старых записях email мог быть
+ * сохранён в любом регистре). При дубликатах предпочитается неархивный сотрудник.
+ */
+export async function findEmployeeAuthByEmailQuery(email: string): Promise<EmployeeAuthRecord | null> {
+  const wanted = email.trim().toLowerCase();
+  if (!wanted) return null;
+  try {
+    const rows = await selectYdbRows('employees');
+    const matches = rows
+      .map((r) => toAuthRecord(fromYdbRow<any>(r as any)))
+      .filter((e) => e.email?.trim().toLowerCase() === wanted);
+    return matches.find((e) => !e.archived) || matches[0] || null;
+  } catch (error) {
+    console.error('Database query failed (findEmployeeAuthByEmailQuery):', error);
+    throw new Error('Database query failed for employee lookup', { cause: error });
+  }
+}
+
+export async function setEmployeePasswordHashQuery(id: string, passwordHash: string) {
+  try {
+    // UPSERT только с id и password_hash обновляет одну колонку существующей строки
+    await upsertYdbRow('employees', { id, password_hash: passwordHash, updated_at: new Date().toISOString() });
+  } catch (error) {
+    console.error('Database query failed (setEmployeePasswordHashQuery):', error);
+    throw new Error('Failed to set employee password', { cause: error });
   }
 }
 

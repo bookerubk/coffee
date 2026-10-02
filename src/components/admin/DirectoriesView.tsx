@@ -49,6 +49,8 @@ export const DirectoriesView: React.FC = () => {
   const [editingDriver, setEditingDriver] = useState<Driver | null>(null);
   const [editingProduct, setEditingProduct] = useState<ProductItem | null>(null);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
+  // Пароль живёт только в состоянии формы: на сервер уходит при сохранении, в кэш браузера не попадает
+  const [employeePassword, setEmployeePassword] = useState('');
   const [editingSlot, setEditingSlot] = useState<SlotConfig | null>(null);
 
   const loadData = async () => {
@@ -143,8 +145,12 @@ export const DirectoriesView: React.FC = () => {
   const handleSaveEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingEmployee) return;
-    await ApiService.saveEmployee(editingEmployee);
+    const saved = await ApiService.saveEmployee({ ...editingEmployee, password: employeePassword || undefined });
+    // При отказе сервера (нет прав, дубликат email, слабый пароль) форма остаётся открытой,
+    // чтобы введённое не пропало; причина показана в баннере сверху.
+    if (!saved) return;
     setEditingEmployee(null);
+    setEmployeePassword('');
     loadData();
   };
 
@@ -706,6 +712,7 @@ export const DirectoriesView: React.FC = () => {
                   role: 'shift_supervisor',
                   pointId: points[0]?.id || '',
                   phone: '',
+                  email: '',
                   archived: false,
                 })
               }
@@ -733,6 +740,8 @@ export const DirectoriesView: React.FC = () => {
                         ? '☕ Старший смены'
                         : emp.role === 'production_operator'
                         ? '🏭 Оператор цеха'
+                        : emp.role === 'driver'
+                        ? '🚚 Водитель'
                         : '🛡️ Администратор'}
                     </span>
                     {assignedPoint && (
@@ -742,6 +751,10 @@ export const DirectoriesView: React.FC = () => {
                       </p>
                     )}
                     {emp.phone && <p className="text-xs text-stone-400 mt-1">{emp.phone}</p>}
+                    {emp.email && <p className="text-xs text-stone-400 mt-1 break-all">{emp.email}</p>}
+                    <p className={`text-[11px] mt-1.5 font-medium ${emp.hasPassword && emp.email ? 'text-emerald-700' : 'text-rose-700'}`}>
+                      {emp.hasPassword && emp.email ? '🔑 Вход разрешён' : '⚠️ Вход невозможен: нужны email и пароль'}
+                    </p>
                   </div>
 
                   <div className="mt-4 pt-3 border-t border-stone-100 flex items-center justify-between">
@@ -749,7 +762,10 @@ export const DirectoriesView: React.FC = () => {
                       {emp.archived ? '⚠️ Не активен' : '✅ В штате'}
                     </span>
                     <button
-                      onClick={() => setEditingEmployee(emp)}
+                      onClick={() => {
+                        setEmployeePassword('');
+                        setEditingEmployee(emp);
+                      }}
                       className="p-1 text-stone-500 hover:text-stone-800 rounded cursor-pointer"
                     >
                       <Edit2 className="w-3.5 h-3.5" />
@@ -1242,9 +1258,45 @@ export const DirectoriesView: React.FC = () => {
                 >
                   <option value="shift_supervisor">Старший смены (кофейня)</option>
                   <option value="production_operator">Оператор производства (цех)</option>
+                  <option value="driver">Водитель</option>
                   <option value="admin">Администратор сети</option>
                 </select>
               </div>
+              {editingEmployee.role === 'production_operator' && (
+                <div>
+                  <label className="font-medium text-stone-700 block mb-1">Цех оператора:</label>
+                  <select
+                    value={editingEmployee.workshopId || ''}
+                    onChange={(e) => setEditingEmployee({ ...editingEmployee, workshopId: e.target.value })}
+                    className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-amber-600 outline-none bg-stone-50"
+                  >
+                    <option value="">-- Все цеха --</option>
+                    {workshops.map((w) => (
+                      <option key={w.id} value={w.id}>
+                        {w.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {editingEmployee.role === 'driver' && (
+                <div>
+                  <label className="font-medium text-stone-700 block mb-1">Профиль водителя:</label>
+                  <select
+                    value={editingEmployee.driverId || ''}
+                    onChange={(e) => setEditingEmployee({ ...editingEmployee, driverId: e.target.value })}
+                    className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-amber-600 outline-none bg-stone-50"
+                  >
+                    <option value="">-- Не выбран --</option>
+                    {drivers.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name} ({d.vehicleModel} {d.licensePlate})
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-[11px] text-stone-500">Водитель видит только накладные, назначенные на этот профиль.</p>
+                </div>
+              )}
               {editingEmployee.role === 'shift_supervisor' && (
                 <div>
                   <label className="font-medium text-stone-700 block mb-1">Привязка к кофейне:</label>
@@ -1272,11 +1324,45 @@ export const DirectoriesView: React.FC = () => {
                   placeholder="+7 (999) 000-00-00"
                 />
               </div>
+              <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3 space-y-3">
+                <p className="font-semibold text-amber-950">Доступ к системе</p>
+                <div>
+                  <label className="font-medium text-stone-700 block mb-1">Email (логин):</label>
+                  <input
+                    type="email"
+                    value={editingEmployee.email || ''}
+                    onChange={(e) => setEditingEmployee({ ...editingEmployee, email: e.target.value })}
+                    autoComplete="off"
+                    className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-amber-600 outline-none bg-white"
+                    placeholder="employee@company.ru"
+                  />
+                </div>
+                <div>
+                  <label className="font-medium text-stone-700 block mb-1">
+                    {editingEmployee.hasPassword ? 'Новый пароль (оставьте пустым, чтобы не менять):' : 'Пароль для входа (не менее 8 символов):'}
+                  </label>
+                  <input
+                    type="password"
+                    value={employeePassword}
+                    onChange={(e) => setEmployeePassword(e.target.value)}
+                    autoComplete="new-password"
+                    minLength={8}
+                    className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-amber-600 outline-none bg-white"
+                    placeholder={editingEmployee.hasPassword ? '••••••••' : 'Придумайте пароль и передайте сотруднику'}
+                  />
+                  <p className="mt-1 text-[11px] text-stone-500">
+                    Пароль нигде не отображается. Сотрудник сможет сменить его сам (значок ключа в шапке).
+                  </p>
+                </div>
+              </div>
             </div>
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-stone-100">
               <button
                 type="button"
-                onClick={() => setEditingEmployee(null)}
+                onClick={() => {
+                  setEditingEmployee(null);
+                  setEmployeePassword('');
+                }}
                 className="px-4 py-2 text-xs text-stone-500 hover:text-stone-700 cursor-pointer"
               >
                 Отмена

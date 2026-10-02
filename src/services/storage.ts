@@ -122,8 +122,32 @@ export const StorageManager = {
       this.setActiveAccountId(user.accountId);
     }
   },
+  /**
+   * Выход: очищаем профиль и кэш данных компании, чтобы следующий пользователь этого браузера
+   * не увидел чужие заказы и справочники. Черновики и аварийные копии неотправленных заявок
+   * (coffee_draft_* / coffee_emergency_backup_*) сохраняются — это не данные для просмотра,
+   * а защита от потери введённого.
+   */
   logout(): void {
     setStoredItem(STORAGE_KEYS.USER_SESSION, null);
+    const dataKeys = [
+      STORAGE_KEYS.ACTIVE_ACCOUNT_ID,
+      STORAGE_KEYS.TENANT_ACCOUNTS,
+      STORAGE_KEYS.POINTS,
+      STORAGE_KEYS.PRODUCTS,
+      STORAGE_KEYS.EMPLOYEES,
+      STORAGE_KEYS.SLOTS,
+      STORAGE_KEYS.ORDERS,
+      STORAGE_KEYS.WAYBILLS,
+      STORAGE_KEYS.LEGAL_ENTITIES,
+      STORAGE_KEYS.WORKSHOPS,
+      STORAGE_KEYS.DRIVERS,
+    ];
+    try {
+      dataKeys.forEach((key) => localStorage.removeItem(key));
+    } catch {
+      /* хранилище недоступно */
+    }
   },
 
   // Multi-tenant Database Account Scope

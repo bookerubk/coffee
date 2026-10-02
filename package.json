@@ -18,7 +18,9 @@
     "ydb:schema": "tsx scripts/ydb-schema.ts",
     "ydb:seed": "tsx scripts/ydb-seed.ts",
     "ydb:setup": "npm run ydb:check && npm run ydb:schema && npm run ydb:seed",
-    "ydb:cloud": "npm run ydb:check && npm run ydb:schema"
+    "ydb:cloud": "npm run ydb:check && npm run ydb:schema",
+    "auth:bootstrap": "tsx scripts/auth-bootstrap.ts",
+    "auth:set-password": "tsx scripts/auth-set-password.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

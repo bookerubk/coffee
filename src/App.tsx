@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { UserRole, SlotId, CoffeePoint, UserSession } from './types';
 import { StorageManager } from './services/storage';
 import { ApiService } from './services/api';
 import { Header } from './components/Header';
 import { LoginPage } from './components/auth/LoginPage';
+import { ChangePasswordModal } from './components/auth/ChangePasswordModal';
 import { OrderCreationView } from './components/supervisor/OrderCreationView';
 import { SupervisorDeliveriesView } from './components/supervisor/SupervisorDeliveriesView';
 import { AggregatedOrdersView } from './components/operator/AggregatedOrdersView';
@@ -15,9 +16,16 @@ import { LegalEntitiesAccountView } from './components/admin/LegalEntitiesAccoun
 
 export default function App() {
   // Current user session & authentication
-  const [currentUser, setCurrentUser] = useState<UserSession | null>(() =>
-    StorageManager.getCurrentUser()
-  );
+  // Источник истины о входе — сервер (HttpOnly-cookie). Локально хранится лишь копия профиля,
+  // поэтому пользователь считается вошедшим только после проверки сессии на сервере.
+  const [currentUser, setCurrentUser] = useState<UserSession | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [loginNotice, setLoginNotice] = useState<string | undefined>();
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const currentUserRef = useRef<UserSession | null>(null);
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
 
   const [currentRole, setCurrentRole] = useState<UserRole>(() => {
     const user = StorageManager.getCurrentUser();
@@ -66,6 +74,40 @@ export default function App() {
     return () => window.removeEventListener('coffee-sync-error', handleSyncError);
   }, []);
 
+  // Восстановление сессии при запуске
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const result = await ApiService.fetchSession();
+      if (cancelled) return;
+      if (result === 'offline') {
+        // Сервер недоступен: работаем с локальной копией профиля (аварийный режим кофейни без интернета).
+        // Записи на сервер при этом всё равно потребуют действующей сессии.
+        const cached = StorageManager.getCurrentUser();
+        if (cached) handleLogin(cached);
+      } else if (result) {
+        handleLogin(result);
+      } else {
+        StorageManager.logout(); // сессии нет — стираем устаревший локальный профиль и кэш
+      }
+      setAuthChecked(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Сервер ответил 401: сессия истекла, отозвана (смена пароля, архивация) — возвращаем на вход
+  useEffect(() => {
+    const handleExpired = () => {
+      if (!currentUserRef.current) return;
+      endSession('Сессия завершена. Войдите снова.');
+    };
+    window.addEventListener('coffee-auth-expired', handleExpired);
+    return () => window.removeEventListener('coffee-auth-expired', handleExpired);
+  }, []);
+
   // Check pending aggregations for operator notification badge
   const [hasNewAggregatedOrder, setHasNewAggregatedOrder] = useState<boolean>(false);
 
@@ -105,6 +147,7 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (!currentUser) return;
     loadAccountData();
 
     const handleStorage = () => {
@@ -113,10 +156,11 @@ export default function App() {
     };
     window.addEventListener('coffee-storage-change', handleStorage);
     return () => window.removeEventListener('coffee-storage-change', handleStorage);
-  }, [currentUser?.accountId]);
+  }, [currentUser?.id]);
 
   // Handle successful login
   const handleLogin = (session: UserSession) => {
+    setLoginNotice(undefined);
     setCurrentUser(session);
     setCurrentRole(session.role);
     StorageManager.setCurrentUser(session);
@@ -138,14 +182,17 @@ export default function App() {
       const match = list.find((p) => p.id === session.pointId);
       if (match) setCurrentPoint(match);
     }
-
-    loadAccountData();
   };
 
-  const handleLogout = () => {
-    StorageManager.logout();
+  const endSession = (notice?: string) => {
+    ApiService.logout(); // сервер сбрасывает cookie
+    StorageManager.logout(); // очищает профиль и кэш данных
+    setShowPasswordModal(false);
     setCurrentUser(null);
+    setLoginNotice(notice);
   };
+
+  const handleLogout = () => endSession();
 
   // Supervisor name
   const currentSupervisorName = useMemo(() => {
@@ -158,8 +205,16 @@ export default function App() {
   }, [currentUser, currentPoint.id]);
 
   // If not authenticated, render Login Page
+  if (!authChecked) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-stone-100 text-sm text-stone-500" role="status">
+        Проверка доступа…
+      </div>
+    );
+  }
+
   if (!currentUser) {
-    return <LoginPage onLogin={handleLogin} />;
+    return <LoginPage onLogin={handleLogin} notice={loginNotice} />;
   }
 
   return (
@@ -172,6 +227,8 @@ export default function App() {
           </button>
         </div>
       )}
+
+      {showPasswordModal && <ChangePasswordModal onClose={() => setShowPasswordModal(false)} />}
 
       {/* Main Header with Role & Point switchers */}
       <Header
@@ -186,6 +243,7 @@ export default function App() {
         hasNewAggregatedOrder={hasNewAggregatedOrder}
         currentUser={currentUser}
         onLogout={handleLogout}
+        onChangePassword={() => setShowPasswordModal(true)}
       />
 
       {/* Main Workspace Body */}

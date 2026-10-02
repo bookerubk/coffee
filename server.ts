@@ -2,7 +2,22 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import { ensureYdbSchema } from './src/db/ydb.ts';
+import { ensureYdbSchema, selectYdbRows, YDB_TABLES } from './src/db/ydb.ts';
+import { HttpError, sendError } from './src/http-errors.ts';
+import { authRouter } from './src/auth/routes.ts';
+import { requireAuth, requireRole, sameOriginGuard, securityHeaders } from './src/auth/middleware.ts';
+import { ROLES } from './src/auth/types.ts';
+import type { AuthUser } from './src/auth/types.ts';
+import {
+  canAccessOrder,
+  canAccessPoint,
+  canAccessWaybill,
+  resolveDriverId,
+  supervisorPointIds,
+} from './src/auth/access.ts';
+import type { AccessContext } from './src/auth/access.ts';
+import { getAuthSecret, hashPassword, validatePassword } from './src/auth/crypto.ts';
+import { bootstrapAdminFromEnv } from './src/auth/bootstrap.ts';
 import {
   seedDatabaseIfEmpty,
   getPointsQuery,
@@ -26,6 +41,7 @@ import {
   upsertDriverQuery,
   getTenantAccountsQuery,
   upsertTenantAccountQuery,
+  findEmployeeAuthByEmailQuery,
 } from './src/db/queries.ts';
 
 dotenv.config();
@@ -36,7 +52,14 @@ const __dirname = path.dirname(__filename);
 export const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
+// За reverse-proxy (Vercel, nginx) IP клиента берётся из X-Forwarded-For — нужно для ограничения попыток входа
+if (process.env.VERCEL || process.env.TRUST_PROXY === 'true') app.set('trust proxy', 1);
+
+app.use(securityHeaders);
+// Неаутентифицированные эндпоинты входа принимают только маленькие тела
+app.use('/api/auth', express.json({ limit: '10kb' }));
 app.use(express.json({ limit: '15mb' }));
+app.use('/api', sameOriginGuard);
 
 const ACCOUNT_ID_RE = /^[a-zA-Z0-9_-]{2,64}$/;
 const SLOT_IDS = new Set(['morning', 'evening']);
@@ -45,34 +68,12 @@ const TRANSIT_REASONS = new Set(['not_delivered', 'damaged', 'spoiled', 'shortag
 const MAX_QUANTITY = 1_000_000;
 const MAX_PHOTO_LENGTH = 3_000_000; // ~2 МБ в base64
 
-// Helper to get active tenant account id (приоритет: заголовок > query > body)
-const getAccountId = (req: express.Request): string => {
-  const candidate =
-    (req.headers['x-account-id'] as string) ||
-    (req.query.accountId as string) ||
-    (req.body && req.body.accountId) ||
-    'acc-aroma';
-  return typeof candidate === 'string' && ACCOUNT_ID_RE.test(candidate) ? candidate : 'acc-aroma';
-};
+// Аккаунт (тенант) определяется ТОЛЬКО по аутентифицированному пользователю.
+// Заголовок x-account-id, query и body для этого больше не используются.
+const getAccountId = (req: express.Request): string => req.user!.accountId;
 
 const isValidQuantity = (value: unknown): value is number =>
   Number.isInteger(value) && (value as number) >= 0 && (value as number) <= MAX_QUANTITY;
-
-/** Бросается из обработчиков, чтобы вернуть клиенту понятную ошибку 4xx. */
-// (поле объявлено явно: `node server.ts` работает в strip-only режиме без parameter properties)
-class HttpError extends Error {
-  status: number;
-  constructor(status: number, message: string) {
-    super(message);
-    this.status = status;
-  }
-}
-
-const sendError = (res: express.Response, error: any, fallback: string) => {
-  if (error instanceof HttpError) return res.status(error.status).json({ error: error.message });
-  console.error(fallback, error);
-  return res.status(500).json({ error: error?.message || fallback });
-};
 
 // Health / database check
 app.get('/api/health', (req, res) => {
@@ -134,46 +135,110 @@ app.get('/api/time', (req, res) => {
   });
 });
 
-// Tenant Accounts API (Multi-tenant Databases)
+// ---------------------------------------------------------------------------
+// Всё, что выше, — публичное (health, time, вход). Всё, что ниже, требует входа в систему.
+// ---------------------------------------------------------------------------
+app.use('/api/auth', authRouter);
+app.use('/api', requireAuth);
+
+// ---------------------------------------------------------------------------
+// Общие помощники авторизации
+// ---------------------------------------------------------------------------
+const adminOnly = requireRole('admin');
+
+async function loadAccessContext(accountId: string): Promise<AccessContext> {
+  const [points, drivers] = await Promise.all([getPointsQuery(accountId), getDriversQuery(accountId)]);
+  return { points, drivers };
+}
+
+/**
+ * id во всех таблицах — глобальный первичный ключ. Без этой проверки администратор одного
+ * аккаунта мог бы перезаписать запись другого аккаунта, прислав её id.
+ */
+async function assertRecordOwnership(table: string, id: string, accountId: string) {
+  const rows = await selectYdbRows(table, { id });
+  const owner = rows[0] ? String((rows[0] as any).account_id || 'acc-aroma') : null;
+  if (owner && owner !== accountId) throw new HttpError(409, 'Запись с таким id уже существует.');
+}
+
+function requireRecordId(body: any): string {
+  if (!body || typeof body !== 'object' || typeof body.id !== 'string' || !body.id.trim() || body.id.length > 100) {
+    throw new HttpError(400, 'Не указан id записи.');
+  }
+  return body.id;
+}
+
+/** Остальным ролям не нужны контакты коллег — отдаём только рабочие поля. */
+const publicEmployee = (e: any) => ({
+  id: e.id,
+  accountId: e.accountId,
+  name: e.name,
+  role: e.role,
+  pointId: e.pointId,
+  workshopId: e.workshopId,
+  driverId: e.driverId,
+  archived: e.archived,
+});
+const employeesFor = (user: AuthUser, list: any[]) => (user.role === 'admin' ? list : list.map(publicEmployee));
+const pointsFor = (user: AuthUser, list: any[]) => {
+  if (user.role !== 'shift_supervisor') return list;
+  const ids = supervisorPointIds(user, list);
+  return list.filter((p) => ids.has(p.id));
+};
+const driversFor = (user: AuthUser, list: any[]) => {
+  if (user.role === 'admin' || user.role === 'production_operator') return list;
+  if (user.role === 'driver') {
+    const id = resolveDriverId(user, list);
+    return list.filter((d) => d.id === id);
+  }
+  return [];
+};
+
+// ---------------------------------------------------------------------------
+// Аккаунт компании
+// ---------------------------------------------------------------------------
+const minimalAccount = (a: any) => ({ id: a.id, name: a.name, dbSchema: '', inn: '', adminEmail: '' });
+
 app.get('/api/accounts', async (req, res) => {
   try {
-    const list = await getTenantAccountsQuery();
-    res.json(list);
+    const user = req.user!;
+    const list = (await getTenantAccountsQuery()).filter((a: any) => a.id === user.accountId);
+    res.json(user.role === 'admin' ? list : list.map(minimalAccount));
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error fetching tenant accounts' });
+    sendError(res, error, 'Не удалось получить аккаунт компании.');
   }
 });
 
-app.post('/api/accounts', async (req, res) => {
+app.post('/api/accounts', adminOnly, async (req, res) => {
   try {
     const account = req.body;
     if (!account || !account.id || !account.name) {
-      return res.status(400).json({ error: 'Необходимо указать ID и название аккаунта' });
+      throw new HttpError(400, 'Необходимо указать ID и название аккаунта');
     }
     if (!ACCOUNT_ID_RE.test(String(account.id))) {
-      return res.status(400).json({ error: 'ID аккаунта: 2–64 символа, только латиница, цифры, «-» и «_».' });
+      throw new HttpError(400, 'ID аккаунта: 2–64 символа, только латиница, цифры, «-» и «_».');
+    }
+    // Администратор правит только профиль своей компании. Новые аккаунты (тенанты)
+    // создаёт оператор платформы — см. BOOTSTRAP_ADMIN_* в .env.example.
+    if (account.id !== req.user!.accountId) {
+      throw new HttpError(403, 'Создавать и изменять чужие аккаунты нельзя.');
     }
     await upsertTenantAccountQuery(account);
     res.json({ success: true, account });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error saving tenant account' });
+    sendError(res, error, 'Не удалось сохранить аккаунт компании.');
   }
 });
 
-// Handbooks API (scoped to accountId)
+// ---------------------------------------------------------------------------
+// Справочники (чтение — по ролям, запись — только администратор)
+// ---------------------------------------------------------------------------
 app.get('/api/handbooks', async (req, res) => {
   try {
-    const accountId = getAccountId(req);
-    const [
-      pointsRes,
-      productsRes,
-      employeesRes,
-      slotsRes,
-      legalEntitiesRes,
-      workshopsRes,
-      driversRes,
-      accountsRes,
-    ] = await Promise.allSettled([
+    const user = req.user!;
+    const accountId = user.accountId;
+    const isAdmin = user.role === 'admin';
+    const results = await Promise.allSettled([
       getPointsQuery(accountId),
       getProductsQuery(accountId),
       getEmployeesQuery(accountId),
@@ -183,198 +248,218 @@ app.get('/api/handbooks', async (req, res) => {
       getDriversQuery(accountId),
       getTenantAccountsQuery(),
     ]);
+    results.forEach((r) => {
+      if (r.status === 'rejected') console.error('Handbooks query failed:', r.reason);
+    });
+    const pick = (i: number): any[] => {
+      const r = results[i];
+      return r.status === 'fulfilled' ? (r.value as any[]) : [];
+    };
+    const accounts = pick(7).filter((a) => a.id === accountId);
 
     res.json({
-      points: pointsRes.status === 'fulfilled' ? pointsRes.value : [],
-      products: productsRes.status === 'fulfilled' ? productsRes.value : [],
-      employees: employeesRes.status === 'fulfilled' ? employeesRes.value : [],
-      slots: slotsRes.status === 'fulfilled' ? slotsRes.value : [],
-      legalEntities: legalEntitiesRes.status === 'fulfilled' ? legalEntitiesRes.value : [],
-      workshops: workshopsRes.status === 'fulfilled' ? workshopsRes.value : [],
-      drivers: driversRes.status === 'fulfilled' ? driversRes.value : [],
-      accounts: accountsRes.status === 'fulfilled' ? accountsRes.value : [],
+      points: pointsFor(user, pick(0)),
+      products: pick(1),
+      employees: employeesFor(user, pick(2)),
+      slots: pick(3),
+      legalEntities: isAdmin ? pick(4) : [],
+      workshops: isAdmin ? pick(5) : [],
+      drivers: driversFor(user, pick(6)),
+      accounts: isAdmin ? accounts : accounts.map(minimalAccount),
     });
   } catch (error: any) {
-    console.error('Failed to get handbooks:', error);
-    res.status(500).json({ error: error.message || 'Database error fetching handbooks' });
+    sendError(res, error, 'Не удалось загрузить справочники.');
   }
 });
 
-// Legal Entities (scoped to accountId)
-app.get('/api/legal-entities', async (req, res) => {
+/** Регистрирует POST-маршрут сохранения справочника (только администратор). */
+function registerHandbookSave(
+  route: string,
+  table: string,
+  label: string,
+  save: (record: any) => Promise<unknown>,
+) {
+  app.post(route, adminOnly, async (req, res) => {
+    try {
+      const accountId = getAccountId(req);
+      const id = requireRecordId(req.body);
+      await assertRecordOwnership(table, id, accountId);
+      await save({ ...req.body, accountId });
+      res.json({ success: true });
+    } catch (error: any) {
+      sendError(res, error, `Не удалось сохранить: ${label}.`);
+    }
+  });
+}
+
+app.get('/api/legal-entities', adminOnly, async (req, res) => {
   try {
-    const accountId = getAccountId(req);
-    const list = await getLegalEntitiesQuery(accountId);
-    res.json(list);
+    res.json(await getLegalEntitiesQuery(getAccountId(req)));
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error fetching legal entities' });
+    sendError(res, error, 'Не удалось получить юридические лица.');
   }
 });
+registerHandbookSave('/api/legal-entities', YDB_TABLES.legalEntities, 'юридическое лицо', upsertLegalEntityQuery);
 
-app.post('/api/legal-entities', async (req, res) => {
+app.get('/api/workshops', adminOnly, async (req, res) => {
   try {
-    const accountId = getAccountId(req);
-    await upsertLegalEntityQuery({ ...req.body, accountId });
-    res.json({ success: true });
+    res.json(await getWorkshopsQuery(getAccountId(req)));
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error saving legal entity' });
+    sendError(res, error, 'Не удалось получить цеха.');
   }
 });
+registerHandbookSave('/api/workshops', YDB_TABLES.workshops, 'цех', upsertWorkshopQuery);
 
-// Workshops (scoped to accountId)
-app.get('/api/workshops', async (req, res) => {
-  try {
-    const accountId = getAccountId(req);
-    const list = await getWorkshopsQuery(accountId);
-    res.json(list);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error fetching workshops' });
-  }
-});
-
-app.post('/api/workshops', async (req, res) => {
-  try {
-    const accountId = getAccountId(req);
-    await upsertWorkshopQuery({ ...req.body, accountId });
-    res.json({ success: true });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error saving workshop' });
-  }
-});
-
-// Drivers (scoped to accountId)
 app.get('/api/drivers', async (req, res) => {
   try {
-    const accountId = getAccountId(req);
-    const list = await getDriversQuery(accountId);
-    res.json(list);
+    res.json(driversFor(req.user!, await getDriversQuery(getAccountId(req))));
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error fetching drivers' });
+    sendError(res, error, 'Не удалось получить водителей.');
   }
 });
+registerHandbookSave('/api/drivers', YDB_TABLES.drivers, 'водителя', upsertDriverQuery);
 
-app.post('/api/drivers', async (req, res) => {
+const DRIVER_STATUSES = new Set(['active', 'on_route', 'day_off']);
+
+// Водитель меняет только статус своей смены (а не всю карточку водителя)
+app.put('/api/drivers/me/status', requireRole('driver'), async (req, res) => {
   try {
-    const accountId = getAccountId(req);
-    await upsertDriverQuery({ ...req.body, accountId });
-    res.json({ success: true });
+    const { status } = req.body ?? {};
+    if (!DRIVER_STATUSES.has(status)) throw new HttpError(400, 'Недопустимый статус смены.');
+    const user = req.user!;
+    const drivers = await getDriversQuery(user.accountId);
+    const driverId = resolveDriverId(user, drivers);
+    const driver = drivers.find((d: any) => d.id === driverId);
+    if (!driver) throw new HttpError(404, 'Профиль водителя не найден. Обратитесь к администратору.');
+    await upsertDriverQuery({ ...driver, accountId: user.accountId, status });
+    res.json({ success: true, driver: { ...driver, status } });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error saving driver' });
+    sendError(res, error, 'Не удалось обновить статус смены.');
   }
 });
 
-// Points (scoped to accountId)
 app.get('/api/points', async (req, res) => {
   try {
-    const accountId = getAccountId(req);
-    const points = await getPointsQuery(accountId);
-    res.json(points);
+    res.json(pointsFor(req.user!, await getPointsQuery(getAccountId(req))));
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error fetching points' });
+    sendError(res, error, 'Не удалось получить кофейни.');
   }
 });
+registerHandbookSave('/api/points', YDB_TABLES.coffeePoints, 'кофейню', upsertPointQuery);
 
-app.post('/api/points', async (req, res) => {
-  try {
-    const accountId = getAccountId(req);
-    await upsertPointQuery({ ...req.body, accountId });
-    res.json({ success: true });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error saving point' });
-  }
-});
-
-// Products (scoped to accountId)
 app.get('/api/products', async (req, res) => {
   try {
-    const accountId = getAccountId(req);
-    const products = await getProductsQuery(accountId);
-    res.json(products);
+    res.json(await getProductsQuery(getAccountId(req)));
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error fetching products' });
+    sendError(res, error, 'Не удалось получить товары.');
   }
 });
+registerHandbookSave('/api/products', YDB_TABLES.products, 'товар', upsertProductQuery);
 
-app.post('/api/products', async (req, res) => {
-  try {
-    const accountId = getAccountId(req);
-    await upsertProductQuery({ ...req.body, accountId });
-    res.json({ success: true });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error saving product' });
-  }
-});
-
-// Employees (scoped to accountId)
 app.get('/api/employees', async (req, res) => {
   try {
-    const accountId = getAccountId(req);
-    const employees = await getEmployeesQuery(accountId);
-    res.json(employees);
+    res.json(employeesFor(req.user!, await getEmployeesQuery(getAccountId(req))));
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error fetching employees' });
+    sendError(res, error, 'Не удалось получить сотрудников.');
   }
 });
 
-app.post('/api/employees', async (req, res) => {
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+app.post('/api/employees', adminOnly, async (req, res) => {
   try {
-    const accountId = getAccountId(req);
-    await upsertEmployeeQuery({ ...req.body, accountId });
+    const admin = req.user!;
+    const accountId = admin.accountId;
+    const id = requireRecordId(req.body);
+    // password / passwordHash / hasPassword из тела запроса никогда не попадают в запись как есть
+    const { password, passwordHash: _ignoredHash, hasPassword: _ignoredFlag, ...fields } = req.body;
+
+    if (typeof fields.name !== 'string' || !fields.name.trim() || fields.name.length > 200) {
+      throw new HttpError(400, 'Укажите имя сотрудника.');
+    }
+    if (!ROLES.includes(fields.role)) throw new HttpError(400, 'Недопустимая роль сотрудника.');
+
+    let email: string | undefined;
+    if (fields.email !== undefined && fields.email !== null && String(fields.email).trim() !== '') {
+      email = String(fields.email).trim().toLowerCase();
+      if (email.length > 254 || !EMAIL_RE.test(email)) throw new HttpError(400, 'Некорректный email.');
+      const holder = await findEmployeeAuthByEmailQuery(email);
+      if (holder && holder.id !== id) throw new HttpError(409, 'Этот email уже используется другим сотрудником.');
+    }
+
+    // Защита от потери доступа: администратор не может разжаловать или заархивировать себя
+    if (id === admin.id && (fields.role !== 'admin' || fields.archived === true)) {
+      throw new HttpError(400, 'Нельзя изменить свою роль или архивировать собственную учётную запись.');
+    }
+
+    let newPasswordHash: string | undefined;
+    if (password !== undefined && password !== null && password !== '') {
+      const weak = validatePassword(password);
+      if (weak) throw new HttpError(400, weak);
+      if (!email) throw new HttpError(400, 'Чтобы задать пароль, укажите email сотрудника.');
+      newPasswordHash = await hashPassword(password);
+    }
+
+    await assertRecordOwnership(YDB_TABLES.employees, id, accountId);
+    await upsertEmployeeQuery({ ...fields, id, email, accountId, passwordHash: newPasswordHash });
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error saving employee' });
+    sendError(res, error, 'Не удалось сохранить сотрудника.');
   }
 });
 
 // Slots (scoped to accountId)
 app.get('/api/slots', async (req, res) => {
   try {
-    const accountId = getAccountId(req);
-    const slots = await getSlotsQuery(accountId);
-    res.json(slots);
+    res.json(await getSlotsQuery(getAccountId(req)));
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error fetching slots' });
+    sendError(res, error, 'Не удалось получить настройки смен.');
   }
 });
 
-app.post('/api/slots', async (req, res) => {
+app.post('/api/slots', adminOnly, async (req, res) => {
   try {
-    const accountId = getAccountId(req);
-    await upsertSlotQuery({ ...req.body, accountId });
+    if (!SLOT_IDS.has(req.body?.id)) throw new HttpError(400, 'Некорректный слот.');
+    await upsertSlotQuery({ ...req.body, accountId: getAccountId(req) });
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error saving slot' });
+    sendError(res, error, 'Не удалось сохранить настройки смены.');
   }
 });
 
-// Orders (scoped to accountId)
-app.get('/api/orders', async (req, res) => {
+// ---------------------------------------------------------------------------
+// Заказы
+// ---------------------------------------------------------------------------
+app.get('/api/orders', requireRole('admin', 'production_operator', 'shift_supervisor'), async (req, res) => {
   try {
-    const accountId = getAccountId(req);
-    const orders = await getOrdersQuery(accountId);
-    res.json(orders);
+    const user = req.user!;
+    const [orders, ctx] = await Promise.all([getOrdersQuery(user.accountId), loadAccessContext(user.accountId)]);
+    res.json(orders.filter((o: any) => canAccessOrder(user, o, ctx)));
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error fetching orders' });
+    sendError(res, error, 'Не удалось получить заказы.');
   }
 });
 
-app.get('/api/orders/previous/:pointId', async (req, res) => {
+app.get('/api/orders/previous/:pointId', requireRole('admin', 'shift_supervisor'), async (req, res) => {
   try {
-    const accountId = getAccountId(req);
-    const orders = await getOrdersQuery(accountId);
+    const user = req.user!;
+    const ctx = await loadAccessContext(user.accountId);
+    if (!canAccessPoint(user, req.params.pointId, ctx)) throw new HttpError(403, 'Нет доступа к этой кофейне.');
+    const orders = await getOrdersQuery(user.accountId);
     const pointOrders = orders
       .filter((o: any) => o.pointId === req.params.pointId && o.status !== 'draft')
       .sort((a: any, b: any) => new Date(b.submittedAt || b.createdAt).getTime() - new Date(a.submittedAt || a.createdAt).getTime());
     res.json(pointOrders[0] || null);
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error fetching previous order' });
+    sendError(res, error, 'Не удалось получить предыдущий заказ.');
   }
 });
 
-app.post('/api/orders', async (req, res) => {
+app.post('/api/orders', requireRole('admin', 'shift_supervisor'), async (req, res) => {
   try {
+    const user = req.user!;
     const payload = req.body ?? {};
-    const accountId = getAccountId(req);
+    const accountId = user.accountId;
     const isDraft = Boolean(payload.isDraft);
 
     if (!payload.pointId || typeof payload.pointId !== 'string') {
@@ -383,6 +468,13 @@ app.post('/api/orders', async (req, res) => {
     if (!SLOT_IDS.has(payload.slotId)) throw new HttpError(400, 'Некорректный слот поставки.');
     if (!DATE_RE.test(String(payload.date))) throw new HttpError(400, 'Некорректная дата заказа.');
     if (!Array.isArray(payload.items)) throw new HttpError(400, 'Список позиций заказа обязателен.');
+
+    // Старший смены оформляет заказы только для своих кофеен
+    const points = await getPointsQuery(accountId);
+    if (user.role === 'shift_supervisor' && !supervisorPointIds(user, points).has(payload.pointId)) {
+      throw new HttpError(403, 'Нет доступа к этой кофейне.');
+    }
+    const point = points.find((p: any) => p.id === payload.pointId);
 
     // Validate non-negative integers
     for (const it of payload.items) {
@@ -394,19 +486,19 @@ app.post('/api/orders', async (req, res) => {
     if (!isDraft && items.length === 0) throw new HttpError(400, 'Нельзя отправить пустую заявку.');
 
     // Idempotency: повторный запрос с тем же ключом не создаёт дубль.
-    // Но черновик с этим ключом — не «уже отправленный заказ»: его нужно обновить
-    // (повторное сохранение) или превратить в отправленный (иначе заявка навсегда
-    // остаётся черновиком, хотя интерфейс сообщает об успешной отправке).
+    // Черновик с этим ключом — не «уже отправленный заказ»: его обновляем или отправляем.
     let existing: any = null;
     if (payload.idempotencyKey) {
       existing = await findOrderByKeyQuery(payload.idempotencyKey, accountId);
+      if (existing && existing.pointId !== payload.pointId) {
+        throw new HttpError(409, 'Ключ идемпотентности уже использован для другой кофейни.');
+      }
       if (existing && existing.status !== 'draft') {
         return res.json({ success: true, order: existing, isDuplicate: true });
       }
     }
 
-    // ID заказа всегда генерирует сервер: id — глобальный первичный ключ, и клиент
-    // не должен иметь возможности перезаписать чужой заказ, передав его id.
+    // ID заказа всегда генерирует сервер: id — глобальный первичный ключ
     const orderId = existing?.id || `ord-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     const nowIso = new Date().toISOString();
 
@@ -415,12 +507,12 @@ app.post('/api/orders', async (req, res) => {
       accountId,
       idempotencyKey: payload.idempotencyKey,
       pointId: payload.pointId,
-      pointName: payload.pointName,
+      pointName: point?.name ?? String(payload.pointName ?? '').slice(0, 200),
       slotId: payload.slotId,
       date: payload.date,
       status: isDraft ? 'draft' : 'submitted',
       items,
-      createdBy: payload.createdBy,
+      createdBy: user.name, // автор — из сессии, а не из тела запроса
       createdAt: existing?.createdAt || nowIso,
       updatedAt: nowIso,
       submittedAt: isDraft ? null : nowIso,
@@ -430,44 +522,48 @@ app.post('/api/orders', async (req, res) => {
 
     res.json({ success: true, order });
   } catch (error: any) {
-    sendError(res, error, 'Failed to submit order');
+    sendError(res, error, 'Не удалось отправить заказ.');
   }
 });
 
-// Waybills (scoped to accountId)
+// ---------------------------------------------------------------------------
+// Накладные
+// ---------------------------------------------------------------------------
 const FINISHED_WAYBILL = new Set(['received', 'received_with_discrepancies']);
 
-async function findWaybillOr404(accountId: string, id: string) {
-  const waybills = await getWaybillsQuery(accountId);
+/** Накладная, доступная пользователю. Чужую или несуществующую не различаем (404). */
+async function findWaybillFor(user: AuthUser, id: string) {
+  const [waybills, ctx] = await Promise.all([getWaybillsQuery(user.accountId), loadAccessContext(user.accountId)]);
   const waybill = waybills.find((w: any) => w.id === id);
-  if (!waybill) throw new HttpError(404, 'Waybill not found');
-  return waybill;
+  if (!waybill || !canAccessWaybill(user, waybill, ctx)) throw new HttpError(404, 'Waybill not found');
+  return { waybill, ctx };
 }
 
 app.get('/api/waybills', async (req, res) => {
   try {
-    const accountId = getAccountId(req);
-    const waybills = await getWaybillsQuery(accountId);
-    res.json(waybills);
+    const user = req.user!;
+    const [waybills, ctx] = await Promise.all([getWaybillsQuery(user.accountId), loadAccessContext(user.accountId)]);
+    res.json(waybills.filter((w: any) => canAccessWaybill(user, w, ctx)));
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error fetching waybills' });
+    sendError(res, error, 'Не удалось получить накладные.');
   }
 });
 
-app.post('/api/waybills/generate', async (req, res) => {
+app.post('/api/waybills/generate', requireRole('admin', 'production_operator'), async (req, res) => {
   try {
-    const { date, slotId, workshopId } = req.body ?? {};
-    const accountId = getAccountId(req);
+    const user = req.user!;
+    const { date, slotId } = req.body ?? {};
+    const accountId = user.accountId;
     if (!DATE_RE.test(String(date))) throw new HttpError(400, 'Некорректная дата.');
     if (!SLOT_IDS.has(slotId)) throw new HttpError(400, 'Некорректный слот.');
+    // Оператор формирует накладные только для своего цеха; цех из запроса учитывается лишь у администратора
+    const workshopId = user.role === 'production_operator' ? user.workshopId : req.body?.workshopId;
 
     const allOrders = await getOrdersQuery(accountId);
     let slotOrders = allOrders.filter(
       (o: any) => o.date === date && o.slotId === slotId && o.status === 'submitted'
     );
 
-    // Оператор цеха формирует накладные только по точкам своего цеха
-    // (так же, как интерфейс показывает ему сводный заказ).
     if (workshopId) {
       const points = await getPointsQuery(accountId);
       const workshopPointIds = new Set(
@@ -521,28 +617,37 @@ app.post('/api/waybills/generate', async (req, res) => {
       await upsertOrderQuery({ ...ord, status: 'aggregated' });
     }
 
-    const updatedList = await getWaybillsQuery(accountId);
-    res.json(updatedList.filter((w: any) => w.date === date && w.slotId === slotId));
+    const [updatedList, ctx] = await Promise.all([getWaybillsQuery(accountId), loadAccessContext(accountId)]);
+    res.json(
+      updatedList.filter((w: any) => w.date === date && w.slotId === slotId && canAccessWaybill(user, w, ctx))
+    );
   } catch (error: any) {
-    sendError(res, error, 'Error generating waybills');
+    sendError(res, error, 'Не удалось сформировать накладные.');
   }
 });
 
-app.put('/api/waybills/:id/dispatch', async (req, res) => {
+app.put('/api/waybills/:id/dispatch', requireRole('admin', 'production_operator'), async (req, res) => {
   try {
-    const { items, newStatus, operatorName, driverName, driverId, workshopId, legalEntityId } = req.body ?? {};
-    const accountId = getAccountId(req);
+    const user = req.user!;
+    const { items, newStatus, driverName, driverId, workshopId, legalEntityId } = req.body ?? {};
     if (!Array.isArray(items)) throw new HttpError(400, 'Не переданы позиции накладной.');
     if (!['formed', 'packing', 'dispatched'].includes(newStatus)) {
       throw new HttpError(400, 'Недопустимый статус отгрузки.');
     }
 
-    const waybill = await findWaybillOr404(accountId, req.params.id);
+    const { waybill, ctx } = await findWaybillFor(user, req.params.id);
     if (FINISHED_WAYBILL.has(waybill.status)) {
       throw new HttpError(409, 'Накладная уже принята — изменить отгрузку нельзя.');
     }
     if (waybill.status === 'dispatched' && newStatus !== 'dispatched') {
       throw new HttpError(409, 'Накладная уже отгружена — вернуть её в сборку нельзя.');
+    }
+    if (driverId && !ctx.drivers.some((d: any) => d.id === driverId)) {
+      throw new HttpError(400, 'Указанный водитель не найден.');
+    }
+    if (legalEntityId) {
+      const entities = await getLegalEntitiesQuery(user.accountId);
+      if (!entities.some((e: any) => e.id === legalEntityId)) throw new HttpError(400, 'Указанное юрлицо не найдено.');
     }
 
     // Validate quantities and reason for production discrepancy
@@ -565,8 +670,7 @@ app.put('/api/waybills/:id/dispatch', async (req, res) => {
         ...orig,
         dispatchedQuantity: updated.dispatchedQuantity,
         dispatchDiscrepancyReason: updated.dispatchDiscrepancyReason,
-        // До приёмки «принято» по умолчанию равно «отгружено». Раньше старое значение
-        // сохранялось даже после исправления отгрузки, и на приёмке появлялось ложное расхождение.
+        // До приёмки «принято» по умолчанию равно «отгружено»
         receivedQuantity: updated.dispatchedQuantity,
       };
     });
@@ -574,52 +678,66 @@ app.put('/api/waybills/:id/dispatch', async (req, res) => {
     waybill.status = newStatus;
     if (newStatus === 'dispatched') {
       waybill.dispatchedAt = new Date().toISOString();
-      waybill.dispatchedBy = operatorName;
-      if (driverName) waybill.driverName = driverName;
+      waybill.dispatchedBy = user.name; // из сессии, а не из тела запроса
+      if (driverName) waybill.driverName = String(driverName).slice(0, 200);
       if (driverId) waybill.driverId = driverId;
-      if (workshopId) waybill.workshopId = workshopId;
+      const ownWorkshop = user.role === 'production_operator' ? user.workshopId : workshopId;
+      if (ownWorkshop) waybill.workshopId = ownWorkshop;
       if (legalEntityId) waybill.legalEntityId = legalEntityId;
     }
 
     await upsertWaybillQuery(waybill);
     res.json(waybill);
   } catch (error: any) {
-    sendError(res, error, 'Error updating dispatch');
+    sendError(res, error, 'Не удалось обновить отгрузку.');
   }
 });
 
-app.put('/api/waybills/:id/driver-status', async (req, res) => {
+app.put('/api/waybills/:id/driver-status', requireRole('admin', 'driver'), async (req, res) => {
   try {
+    const user = req.user!;
     const { status, driverName, driverId } = req.body ?? {};
-    const accountId = getAccountId(req);
     // Водитель может только начать рейс; приёмку и прочие статусы ему менять нельзя.
     if (status !== undefined && status !== 'dispatched') {
       throw new HttpError(400, 'Водитель может только перевести накладную в статус «Отгружена (в пути)».');
     }
 
-    const waybill = await findWaybillOr404(accountId, req.params.id);
+    const { waybill, ctx } = await findWaybillFor(user, req.params.id);
     if (FINISHED_WAYBILL.has(waybill.status)) {
       throw new HttpError(409, 'Накладная уже принята — статус рейса изменить нельзя.');
     }
 
-    if (driverName) waybill.driverName = driverName;
-    if (driverId) waybill.driverId = driverId;
+    if (user.role === 'driver') {
+      // Личность водителя — из сессии; назначить рейс на другого водителя нельзя
+      const ownId = resolveDriverId(user, ctx.drivers);
+      const profile = ctx.drivers.find((d: any) => d.id === ownId);
+      if (ownId && !waybill.driverId) waybill.driverId = ownId;
+      if (!waybill.driverName) {
+        waybill.driverName = profile ? `${profile.name} (${profile.vehicleModel} ${profile.licensePlate})` : user.name;
+      }
+    } else {
+      if (driverId && !ctx.drivers.some((d: any) => d.id === driverId)) {
+        throw new HttpError(400, 'Указанный водитель не найден.');
+      }
+      if (driverName) waybill.driverName = String(driverName).slice(0, 200);
+      if (driverId) waybill.driverId = driverId;
+    }
     if (status) waybill.status = status;
 
     await upsertWaybillQuery(waybill);
     res.json(waybill);
   } catch (error: any) {
-    sendError(res, error, 'Error updating driver status');
+    sendError(res, error, 'Не удалось обновить статус рейса.');
   }
 });
 
-app.put('/api/waybills/:id/receive', async (req, res) => {
+app.put('/api/waybills/:id/receive', requireRole('admin', 'shift_supervisor'), async (req, res) => {
   try {
-    const { items, supervisorName } = req.body ?? {};
-    const accountId = getAccountId(req);
+    const user = req.user!;
+    const { items } = req.body ?? {};
     if (!Array.isArray(items)) throw new HttpError(400, 'Не переданы позиции приёмки.');
 
-    const waybill = await findWaybillOr404(accountId, req.params.id);
+    const { waybill } = await findWaybillFor(user, req.params.id);
     if (waybill.status !== 'dispatched') {
       throw new HttpError(409, 'Принять можно только отгруженную накладную, которая ещё не принята.');
     }
@@ -668,22 +786,22 @@ app.put('/api/waybills/:id/receive', async (req, res) => {
     );
     waybill.status = hasDiscrepancy ? 'received_with_discrepancies' : 'received';
     waybill.receivedAt = new Date().toISOString();
-    waybill.receivedBy = supervisorName;
+    waybill.receivedBy = user.name; // из сессии, а не из тела запроса
 
     await upsertWaybillQuery(waybill);
     res.json(waybill);
   } catch (error: any) {
-    sendError(res, error, 'Error updating receive');
+    sendError(res, error, 'Не удалось принять накладную.');
   }
 });
 
-// Seed / Reset
-app.post('/api/reset', async (req, res) => {
+// Seed / Reset (идемпотентное наполнение демо-данными — только администратор)
+app.post('/api/reset', adminOnly, async (req, res) => {
   try {
     await seedDatabaseIfEmpty();
     res.json({ success: true });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Error resetting data' });
+    sendError(res, error, 'Не удалось выполнить сидирование.');
   }
 });
 
@@ -711,17 +829,19 @@ async function startServer() {
   // Seed only when a database is explicitly configured. This keeps the
   // preview and Vercel process healthy before YDB variables are added.
   const databaseConfigured = Boolean(process.env.YDB_ENDPOINT && process.env.YDB_DATABASE);
+
+  // Без секрета подписи вход невозможен — в production падаем сразу, а не при первом логине
+  getAuthSecret();
+
   if (databaseConfigured) {
-    if (process.env.YDB_AUTO_SCHEMA === 'true') {
-      ensureYdbSchema().catch((err) => console.error('YDB schema initialization error:', err));
-    }
-    if (process.env.YDB_AUTO_SEED === 'true') {
-      seedDatabaseIfEmpty().catch((err) => {
-        console.error('Initial seed error:', err);
-      });
-    }
+    // Порядок важен: сначала схема (и миграции), потом демо-данные, потом первый администратор
+    (async () => {
+      if (process.env.YDB_AUTO_SCHEMA === 'true') await ensureYdbSchema();
+      if (process.env.YDB_AUTO_SEED === 'true') await seedDatabaseIfEmpty();
+      await bootstrapAdminFromEnv();
+    })().catch((err) => console.error('Database initialization error:', err));
   } else {
-    console.warn('Database is not configured; starting without automatic seeding.');
+    console.warn('Database is not configured; starting without automatic seeding. Вход в систему невозможен без базы данных.');
   }
 
   const isProd = process.env.NODE_ENV === 'production';
@@ -751,5 +871,6 @@ async function startServer() {
 if (process.env.VERCEL !== '1') {
   startServer().catch((err) => {
     console.error('Failed to start server:', err);
+    process.exitCode = 1; // чтобы PM2/Docker/CI видели неудачный запуск
   });
 }

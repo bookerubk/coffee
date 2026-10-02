@@ -11,6 +11,12 @@ type Row = Record<string, unknown>;
 const schemas = new Map<string, Map<string, string>>();
 const tables = new Map<string, Map<string, Row>>();
 
+/** Создаёт таблицу «как в старой версии схемы» — для проверки миграции колонок. */
+export function createLegacyTable(table: string, columns: string[]) {
+  schemas.set(table, new Map(columns.map((c) => c.split(/\s+/) as [string, string])));
+  tables.set(table, new Map());
+}
+
 export function resetFakeYdb() {
   schemas.clear();
   tables.clear();
@@ -36,6 +42,25 @@ function exec(text: string, params: Record<string, any>): Row[][] {
       tables.set(table, new Map());
     }
     return [];
+  }
+
+  m = text.match(/^ALTER TABLE `(\w+)` ADD COLUMN (\w+) (\w+);$/);
+  if (m) {
+    const [, table, column, type] = m;
+    const schema = schemas.get(table);
+    if (!schema) throw new Error(`Table not found: ${table}`);
+    if (schema.has(column)) throw new Error(`Column already exists: ${column}`);
+    schema.set(column, type);
+    return [];
+  }
+
+  m = text.match(/^SELECT (\w+) FROM `(\w+)` LIMIT 1;$/);
+  if (m) {
+    const [, column, table] = m;
+    const schema = schemas.get(table);
+    if (!schema) throw new Error(`Table not found: ${table}`);
+    if (!schema.has(column)) throw new Error(`Column not found: ${column}`);
+    return [[]];
   }
 
   m = text.match(/^UPSERT INTO `(\w+)` \((.*?)\) VALUES \((.*?)\);$/s);

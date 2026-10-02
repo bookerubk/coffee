@@ -1,4 +1,5 @@
 import {
+  UserSession,
   ShiftOrder,
   Waybill,
   WaybillStatus,
@@ -38,15 +39,26 @@ export class ApiError extends Error {
 }
 
 /**
- * Returns common headers with active tenant account isolation
+ * Общие заголовки. Аккаунт (тенант) определяет сервер по сессии пользователя —
+ * передавать его с клиента не нужно (заголовок x-account-id сервером игнорируется).
  */
 function getApiHeaders(extra?: Record<string, string>): Record<string, string> {
-  const accountId = StorageManager.getActiveAccountId();
   return {
     'Content-Type': 'application/json',
-    'x-account-id': accountId,
     ...(extra || {}),
   };
+}
+
+/**
+ * fetch для защищённых эндпоинтов. Сессия хранится в HttpOnly-cookie, поэтому токен JavaScript
+ * недоступен. При 401 (сессия истекла или отозвана) сообщаем приложению — оно вернёт на экран входа.
+ */
+async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const res = await fetch(input, { credentials: 'same-origin', ...init });
+  if (res.status === 401 && typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('coffee-auth-expired'));
+  }
+  return res;
 }
 
 /**
@@ -302,6 +314,14 @@ let lastHandbooksFetchTime = 0;
 let lastHandbooksData: any = null;
 let lastHandbooksAccountId = '';
 
+/** Справочники зависят от роли пользователя — при смене пользователя кэш сбрасывается. */
+function resetHandbooksCache() {
+  handbooksInFlight = null;
+  lastHandbooksData = null;
+  lastHandbooksFetchTime = 0;
+  lastHandbooksAccountId = '';
+}
+
 function reportSyncError(message: string) {
   console.error(message);
   if (typeof window !== 'undefined') {
@@ -309,25 +329,30 @@ function reportSyncError(message: string) {
   }
 }
 
+type PersistResult = 'ok' | 'rejected' | 'offline';
+
 /**
- * Сохраняет сущность на сервере. Раньше ответ сервера не проверялся: при ошибке 500
- * изменение молча оставалось только в localStorage и пропадало при следующей синхронизации.
- * Теперь ошибка показывается пользователю (событие coffee-sync-error), а функция возвращает false.
+ * Сохраняет сущность на сервере и показывает пользователю ошибку, если не вышло:
+ *  - 'ok' — сохранено;
+ *  - 'rejected' — сервер отклонил (нет прав, невалидные данные, сессия истекла): локально не сохраняем;
+ *  - 'offline' — нет связи: изменение остаётся только в этом браузере.
  */
-async function persistToServer(path: string, label: string, body: object): Promise<boolean> {
+async function persistToServer(path: string, label: string, body: object): Promise<PersistResult> {
   try {
-    const res = await fetch(path, {
+    const res = await apiFetch(path, {
       method: 'POST',
       headers: getApiHeaders(),
-      body: JSON.stringify({ ...body, accountId: StorageManager.getActiveAccountId() }),
+      body: JSON.stringify(body),
     });
-    if (res.ok) return true;
+    if (res.ok) return 'ok';
+    if (res.status === 401) return 'rejected'; // App сама вернёт на экран входа
     const err = await res.json().catch(() => ({}));
-    reportSyncError(`Не удалось сохранить ${label} на сервере: ${err.error || `ошибка ${res.status}`}. Изменение сохранено только в этом браузере.`);
-  } catch (e) {
+    reportSyncError(`Не удалось сохранить ${label}: ${err.error || `ошибка ${res.status}`}.`);
+    return 'rejected';
+  } catch {
     reportSyncError(`Нет связи с сервером: ${label} сохранён только в этом браузере.`);
+    return 'offline';
   }
-  return false;
 }
 
 /**
@@ -335,11 +360,85 @@ async function persistToServer(path: string, label: string, body: object): Promi
  */
 export const ApiService = {
   /**
+   * Вход по email и паролю. Сервер выставляет HttpOnly-cookie с сессией.
+   */
+  async login(email: string, password: string): Promise<UserSession> {
+    let res: Response;
+    try {
+      res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: getApiHeaders(),
+        credentials: 'same-origin',
+        body: JSON.stringify({ email, password }),
+      });
+    } catch {
+      throw new ApiError('Нет связи с сервером. Проверьте подключение к интернету.');
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new ApiError(data.error || 'Не удалось выполнить вход.');
+    resetHandbooksCache();
+    StorageManager.setCurrentUser(data.user);
+    return data.user as UserSession;
+  },
+
+  /**
+   * Проверка текущей сессии при запуске приложения:
+   *  - UserSession — вход выполнен;
+   *  - null — не выполнен или сессия истекла;
+   *  - 'offline' — сервер недоступен (статус неизвестен).
+   */
+  async fetchSession(): Promise<UserSession | null | 'offline'> {
+    try {
+      const res = await fetch('/api/auth/me', { headers: getApiHeaders(), credentials: 'same-origin' });
+      if (res.status === 401) return null;
+      if (!res.ok) return 'offline';
+      const data = await res.json();
+      return (data.user as UserSession) ?? null;
+    } catch {
+      return 'offline';
+    }
+  },
+
+  async logout(): Promise<void> {
+    resetHandbooksCache();
+    try {
+      await fetch('/api/auth/logout', { method: 'POST', headers: getApiHeaders(), credentials: 'same-origin' });
+    } catch {
+      /* cookie истечёт сама; локальные данные очищаются в любом случае */
+    }
+  },
+
+  async changePassword(currentPassword: string, newPassword: string): Promise<void> {
+    const res = await apiFetch('/api/auth/change-password', {
+      method: 'POST',
+      headers: getApiHeaders(),
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new ApiError(err.error || 'Не удалось сменить пароль.');
+    }
+  },
+
+  /** Водитель меняет только статус своей смены. */
+  async updateMyDriverStatus(status: Driver['status']): Promise<void> {
+    const res = await apiFetch('/api/drivers/me/status', {
+      method: 'PUT',
+      headers: getApiHeaders(),
+      body: JSON.stringify({ status }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new ApiError(err.error || 'Не удалось обновить статус смены.');
+    }
+  },
+
+  /**
    * Fetch Tenant Accounts (multi-tenant databases)
    */
   async getTenantAccounts(): Promise<TenantAccount[]> {
     try {
-      const res = await fetch('/api/accounts', { headers: getApiHeaders() });
+      const res = await apiFetch('/api/accounts', { headers: getApiHeaders() });
       if (res.ok) {
         const list: TenantAccount[] = await res.json();
         list.forEach((a) => StorageManager.saveTenantAccount(a));
@@ -355,7 +454,7 @@ export const ApiService = {
    * Register a new Tenant Account (Isolated Database)
    */
   async createTenantAccount(account: TenantAccount): Promise<TenantAccount> {
-    const res = await fetch('/api/accounts', {
+    const res = await apiFetch('/api/accounts', {
       method: 'POST',
       headers: getApiHeaders(),
       body: JSON.stringify(account),
@@ -411,7 +510,7 @@ export const ApiService = {
 
     try {
       const accountId = StorageManager.getActiveAccountId();
-      const response = await fetch('/api/orders', {
+      const response = await apiFetch('/api/orders', {
         method: 'POST',
         headers: getApiHeaders(),
         body: JSON.stringify({ ...payload, accountId }),
@@ -449,7 +548,7 @@ export const ApiService = {
    */
   async getOrders(): Promise<ShiftOrder[]> {
     try {
-      const res = await fetch('/api/orders', { headers: getApiHeaders() });
+      const res = await apiFetch('/api/orders', { headers: getApiHeaders() });
       if (res.ok) {
         const orders: ShiftOrder[] = await res.json();
         // Update local mirror
@@ -467,7 +566,7 @@ export const ApiService = {
    */
   async getPreviousOrder(pointId: string): Promise<ShiftOrder | null> {
     try {
-      const res = await fetch(`/api/orders/previous/${pointId}`, { headers: getApiHeaders() });
+      const res = await apiFetch(`/api/orders/previous/${pointId}`, { headers: getApiHeaders() });
       if (res.ok) {
         return await res.json();
       }
@@ -485,7 +584,7 @@ export const ApiService = {
    * Generate waybills in YDB
    */
   async generateWaybillsForSlot(date: string, slotId: SlotId, workshopId?: string): Promise<Waybill[]> {
-    const res = await fetch('/api/waybills/generate', {
+    const res = await apiFetch('/api/waybills/generate', {
       method: 'POST',
       headers: getApiHeaders(),
       body: JSON.stringify({ date, slotId, workshopId, accountId: StorageManager.getActiveAccountId() }),
@@ -518,7 +617,7 @@ export const ApiService = {
     workshopId?: string,
     legalEntityId?: string
   ): Promise<Waybill> {
-    const res = await fetch(`/api/waybills/${waybillId}/dispatch`, {
+    const res = await apiFetch(`/api/waybills/${waybillId}/dispatch`, {
       method: 'PUT',
       headers: getApiHeaders(),
       body: JSON.stringify({
@@ -552,7 +651,7 @@ export const ApiService = {
     driverName?: string,
     driverId?: string
   ): Promise<Waybill> {
-    const res = await fetch(`/api/waybills/${waybillId}/driver-status`, {
+    const res = await apiFetch(`/api/waybills/${waybillId}/driver-status`, {
       method: 'PUT',
       headers: getApiHeaders(),
       body: JSON.stringify({
@@ -587,7 +686,7 @@ export const ApiService = {
     }[],
     supervisorName: string
   ): Promise<Waybill> {
-    const res = await fetch(`/api/waybills/${waybillId}/receive`, {
+    const res = await apiFetch(`/api/waybills/${waybillId}/receive`, {
       method: 'PUT',
       headers: getApiHeaders(),
       body: JSON.stringify({
@@ -630,7 +729,7 @@ export const ApiService = {
         const timeoutId = setTimeout(() => controller.abort(), 12000);
         let res: Response;
         try {
-          res = await fetch('/api/handbooks', {
+          res = await apiFetch('/api/handbooks', {
             headers: getApiHeaders(),
             signal: controller.signal,
           });
@@ -674,63 +773,68 @@ export const ApiService = {
    * Save Legal Entity to YDB
    */
   async saveLegalEntity(entity: LegalEntity): Promise<boolean> {
-    const persisted = await persistToServer('/api/legal-entities', 'юридическое лицо', entity);
-    StorageManager.saveLegalEntity(entity);
-    return persisted;
+    const result = await persistToServer('/api/legal-entities', 'юридическое лицо', entity);
+    if (result !== 'rejected') StorageManager.saveLegalEntity(entity);
+    return result === 'ok';
   },
 
   /**
    * Save Workshop to YDB
    */
   async saveWorkshop(workshop: Workshop): Promise<boolean> {
-    const persisted = await persistToServer('/api/workshops', 'цех', workshop);
-    StorageManager.saveWorkshop(workshop);
-    return persisted;
+    const result = await persistToServer('/api/workshops', 'цех', workshop);
+    if (result !== 'rejected') StorageManager.saveWorkshop(workshop);
+    return result === 'ok';
   },
 
   /**
    * Save Driver to YDB
    */
   async saveDriver(driver: Driver): Promise<boolean> {
-    const persisted = await persistToServer('/api/drivers', 'водителя', driver);
-    StorageManager.saveDriver(driver);
-    return persisted;
+    const result = await persistToServer('/api/drivers', 'водителя', driver);
+    if (result !== 'rejected') StorageManager.saveDriver(driver);
+    return result === 'ok';
   },
 
   /**
    * Save Point to YDB
    */
   async savePoint(point: CoffeePoint): Promise<boolean> {
-    const persisted = await persistToServer('/api/points', 'кофейню', point);
-    StorageManager.savePoint(point);
-    return persisted;
+    const result = await persistToServer('/api/points', 'кофейню', point);
+    if (result !== 'rejected') StorageManager.savePoint(point);
+    return result === 'ok';
   },
 
   /**
    * Save Product to YDB
    */
   async saveProduct(prod: ProductItem): Promise<boolean> {
-    const persisted = await persistToServer('/api/products', 'товар', prod);
-    StorageManager.saveProduct(prod);
-    return persisted;
+    const result = await persistToServer('/api/products', 'товар', prod);
+    if (result !== 'rejected') StorageManager.saveProduct(prod);
+    return result === 'ok';
   },
 
   /**
    * Save Employee to YDB
    */
-  async saveEmployee(emp: Employee): Promise<boolean> {
-    const persisted = await persistToServer('/api/employees', 'сотрудника', emp);
-    StorageManager.saveEmployee(emp);
-    return persisted;
+  async saveEmployee(emp: Employee & { password?: string }): Promise<boolean> {
+    // Пароль уходит только на сервер; в локальный кэш он попадать не должен
+    const { password, ...cached } = emp;
+    const result = await persistToServer('/api/employees', 'сотрудника', emp);
+    if (result !== 'rejected') {
+      StorageManager.saveEmployee({ ...cached, hasPassword: Boolean(cached.hasPassword || (result === 'ok' && password)) });
+    }
+    return result === 'ok';
   },
+
 
   /**
    * Save Slot to YDB
    */
   async saveSlot(slot: SlotConfig): Promise<boolean> {
-    const persisted = await persistToServer('/api/slots', 'настройки смены', slot);
-    StorageManager.saveSlot(slot);
-    return persisted;
+    const result = await persistToServer('/api/slots', 'настройки смены', slot);
+    if (result !== 'rejected') StorageManager.saveSlot(slot);
+    return result === 'ok';
   },
 
   /**
@@ -738,7 +842,7 @@ export const ApiService = {
    */
   async getWaybills(): Promise<Waybill[]> {
     try {
-      const res = await fetch('/api/waybills', { headers: getApiHeaders() });
+      const res = await apiFetch('/api/waybills', { headers: getApiHeaders() });
       if (res.ok) {
         const waybills: Waybill[] = await res.json();
         waybills.forEach((w) => StorageManager.saveWaybill(w));
