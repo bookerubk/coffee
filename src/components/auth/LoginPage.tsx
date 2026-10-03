@@ -55,25 +55,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin, notice }) => {
           )}
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-            <div className="rounded-xl border border-amber-200/80 bg-amber-50/70 p-3 text-xs text-amber-900 flex items-center justify-between gap-2">
-              <div>
-                <span className="font-bold">Администратор:</span> admin@aroma-coffee.ru
-                <br />
-                <span className="font-bold">Пароль:</span> 1
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setEmail('admin@aroma-coffee.ru');
-                  setPassword('1');
-                  setError('');
-                }}
-                className="shrink-0 px-2.5 py-1.5 rounded-lg bg-amber-800 text-white font-medium hover:bg-amber-900 transition-colors text-xs"
-              >
-                Заполнить
-              </button>
-            </div>
-
             <label className="flex flex-col gap-2 text-sm font-semibold">
               Email
               <input

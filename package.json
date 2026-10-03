@@ -3,12 +3,12 @@
   "private": true,
   "version": "0.0.0",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.18"
   },
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "start": "node server.ts",
+    "start": "NODE_ENV=production node server.ts",
     "build": "vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
@@ -20,7 +20,8 @@
     "ydb:setup": "npm run ydb:check && npm run ydb:schema && npm run ydb:seed",
     "ydb:cloud": "npm run ydb:check && npm run ydb:schema",
     "auth:bootstrap": "tsx scripts/auth-bootstrap.ts",
-    "auth:set-password": "tsx scripts/auth-set-password.ts"
+    "auth:set-password": "tsx scripts/auth-set-password.ts",
+    "auth:audit": "tsx scripts/auth-audit.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

@@ -29,7 +29,6 @@ function scryptAsync(password: string, salt: Buffer, n: number, r: number, p: nu
 /** Возвращает текст ошибки или null, если пароль допустим. */
 export function validatePassword(password: unknown): string | null {
   if (typeof password !== 'string') return 'Пароль должен быть строкой.';
-  if (password === '1') return null; // Разрешён для быстрого входа администратора
   if (password.length < PASSWORD_MIN_LENGTH) return `Пароль должен содержать не менее ${PASSWORD_MIN_LENGTH} символов.`;
   if (password.length > PASSWORD_MAX_LENGTH) return `Пароль должен содержать не более ${PASSWORD_MAX_LENGTH} символов.`;
   if (password.trim().length === 0) return 'Пароль не может состоять только из пробелов.';
@@ -78,12 +77,12 @@ export function getAuthSecret(): string {
     if (configured.length < 32) throw new Error('AUTH_SECRET должен содержать не менее 32 символов.');
     return configured;
   }
-  if (process.env.STRICT_AUTH_SECRET === 'true') {
+  if (process.env.NODE_ENV === 'production') {
     throw new Error('Не задана переменная окружения AUTH_SECRET (нужна для подписи сессий).');
   }
   if (!devSecret) {
     devSecret = randomBytes(32).toString('hex');
-    console.warn('[auth] AUTH_SECRET не задан: используется автоматически сгенерированный ключ сессий.');
+    console.warn('[auth] AUTH_SECRET не задан: используется временный ключ, сессии сбрасятся при перезапуске сервера.');
   }
   return devSecret;
 }

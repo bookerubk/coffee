@@ -29,7 +29,7 @@ export async function bootstrapAdminFromEnv(env: NodeJS.ProcessEnv = process.env
   const existing = await findEmployeeAuthByEmailQuery(email);
   if (existing) {
     if (existing.passwordHash) {
-      console.log(`[auth] У ${email} уже задан пароль.`);
+      console.log(`[auth] У ${email} уже задан пароль — BOOTSTRAP_ADMIN_* пропущен. Удалите эти переменные из окружения.`);
       return 'exists';
     }
     await setEmployeePasswordHashQuery(existing.id, await hashPassword(password));
@@ -42,7 +42,7 @@ export async function bootstrapAdminFromEnv(env: NodeJS.ProcessEnv = process.env
   if (!accounts.some((a: any) => a.id === accountId)) {
     await upsertTenantAccountQuery({
       id: accountId,
-      name: env.BOOTSTRAP_ADMIN_ACCOUNT_NAME?.trim() || 'Сеть кофеен «Арома Холдинг»',
+      name: env.BOOTSTRAP_ADMIN_ACCOUNT_NAME?.trim() || accountId,
       adminEmail: email,
       adminName: env.BOOTSTRAP_ADMIN_NAME?.trim() || 'Администратор',
     });

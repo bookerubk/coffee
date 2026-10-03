@@ -1,5 +1,4 @@
 import express from 'express';
-import fs from 'node:fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
@@ -45,7 +44,6 @@ import {
   findEmployeeAuthByEmailQuery,
 } from './src/db/queries.ts';
 
-process.env.DISABLE_HMR = 'true';
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -840,19 +838,15 @@ async function startServer() {
     (async () => {
       if (process.env.YDB_AUTO_SCHEMA === 'true') await ensureYdbSchema();
       if (process.env.YDB_AUTO_SEED === 'true') await seedDatabaseIfEmpty();
-      await bootstrapAdminFromEnv({
-        ...process.env,
-        BOOTSTRAP_ADMIN_EMAIL: process.env.BOOTSTRAP_ADMIN_EMAIL || 'admin@aroma-coffee.ru',
-        BOOTSTRAP_ADMIN_PASSWORD: process.env.BOOTSTRAP_ADMIN_PASSWORD || '1',
-      });
+      // Учётные данные первого администратора берутся только из окружения — значений по умолчанию нет
+      await bootstrapAdminFromEnv();
     })().catch((err) => console.error('Database initialization error:', err));
   } else {
     console.warn('Database is not configured; starting without automatic seeding. Вход в систему невозможен без базы данных.');
   }
 
-  const hasDist = fs.existsSync(path.resolve(__dirname, 'dist', 'index.html'));
-  const isProd = process.env.NODE_ENV === 'production' || hasDist;
-  if (isProd && hasDist) {
+  const isProd = process.env.NODE_ENV === 'production';
+  if (isProd) {
     app.use(express.static(path.resolve(__dirname, 'dist')));
     app.get(/^(?!\/api\/).*/, (req, res) => {
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
@@ -862,8 +856,8 @@ async function startServer() {
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        hmr: false,
-        watch: null,
+        hmr: process.env.DISABLE_HMR !== 'true',
+        watch: process.env.DISABLE_HMR === 'true' ? null : {},
       },
       appType: 'spa',
     });
@@ -876,6 +870,7 @@ async function startServer() {
 
   server.on('error', (err: any) => {
     console.error('Server listen error:', err);
+    process.exit(1); // порт занят и т.п.: процесс не должен оставаться «живым» без сервера
   });
 }
 

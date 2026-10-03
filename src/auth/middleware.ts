@@ -13,6 +13,11 @@ declare global {
   }
 }
 
+/** HTTPS напрямую или через reverse-proxy (nginx, Vercel, Cloud Run выставляют X-Forwarded-Proto). */
+export function isHttps(req: Request): boolean {
+  return req.secure || req.headers['x-forwarded-proto'] === 'https';
+}
+
 export function parseCookies(header: string | undefined): Record<string, string> {
   const result: Record<string, string> = {};
   if (!header) return result;
@@ -30,29 +35,58 @@ export function parseCookies(header: string | undefined): Record<string, string>
   return result;
 }
 
+/**
+ * Режим «встроенного предпросмотра» (iframe в AI Studio и т.п.) — только для разработки.
+ * Требует ALLOW_EMBEDDED_PREVIEW=true и ИГНОРИРУЕТСЯ при NODE_ENV=production: в боевой среде cookie
+ * всегда SameSite=Lax, а встраивание сайта в чужие страницы запрещено.
+ */
+export function embeddedPreviewEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.ALLOW_EMBEDDED_PREVIEW === 'true' && env.NODE_ENV !== 'production';
+}
+
+function cookieAttributes(secure: boolean): string {
+  // Для iframe нужен SameSite=None; Secure; Partitioned (CHIPS: cookie изолирована по сайту-родителю).
+  if (embeddedPreviewEnabled()) return 'SameSite=None; Secure; Partitioned';
+  // HttpOnly — токен недоступен JavaScript (защита от кражи через XSS);
+  // SameSite=Lax — cookie не отправляется с чужих сайтов при POST/PUT (защита от CSRF).
+  return `SameSite=Lax${secure ? '; Secure' : ''}`;
+}
+
 export function sessionCookie(token: string, secure: boolean): string {
-  // SameSite=None; Secure позволяет cookie работать в iframe (AI Studio / Cloud Run)
-  const isSecure = secure || process.env.NODE_ENV === 'production';
-  const sameSite = isSecure ? 'SameSite=None; Secure; Partitioned' : 'SameSite=Lax';
-  return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; ${sameSite}; Max-Age=${SESSION_TTL_SECONDS}`;
+  return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; ${cookieAttributes(secure)}; Max-Age=${SESSION_TTL_SECONDS}`;
 }
 
 export function clearedSessionCookie(secure: boolean): string {
-  const isSecure = secure || process.env.NODE_ENV === 'production';
-  const sameSite = isSecure ? 'SameSite=None; Secure; Partitioned' : 'SameSite=Lax';
-  return `${SESSION_COOKIE}=; Path=/; HttpOnly; ${sameSite}; Max-Age=0`;
+  return `${SESSION_COOKIE}=; Path=/; HttpOnly; ${cookieAttributes(secure)}; Max-Age=0`;
 }
 
 export const securityHeaders: RequestHandler = (req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'same-origin');
+  if (!embeddedPreviewEnabled()) {
+    // Запрет встраивания сайта в чужие страницы (защита от кликджекинга)
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+  }
   if (req.path.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');
   next();
 };
 
+/** Явный список доверенных источников (точные origin через запятую), например за нестандартным прокси. */
+export function trustedOrigins(env: NodeJS.ProcessEnv = process.env): Set<string> {
+  return new Set(
+    (env.TRUSTED_ORIGINS || '')
+      .split(',')
+      .map((o) => o.trim().replace(/\/+$/, '').toLowerCase())
+      .filter(Boolean),
+  );
+}
+
 /**
- * Дополнительная защита от CSRF: запросы, изменяющие данные, принимаются, только если
- * заголовок Origin (когда он есть) указывает на этот же хост либо доверенные домены платформы.
+ * Дополнительная защита от CSRF: запросы, изменяющие данные, принимаются, только если заголовок
+ * Origin (когда он есть) в точности совпадает с хостом этого сервера или входит в TRUSTED_ORIGINS.
+ * Сравнение строгое: никаких масок вроде *.run.app и проверок «содержит localhost» —
+ * такие домены может зарегистрировать кто угодно.
  */
 export const sameOriginGuard: RequestHandler = (req, res, next) => {
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
@@ -61,16 +95,8 @@ export const sameOriginGuard: RequestHandler = (req, res, next) => {
   const forwardedHost = (req.headers['x-forwarded-host'] as string | undefined)?.split(',')[0]?.trim();
   const host = forwardedHost || req.headers.host;
   try {
-    const originHost = new URL(origin).host;
-    if (
-      originHost === host ||
-      originHost.endsWith('.googleusercontent.com') ||
-      originHost.endsWith('.run.app') ||
-      originHost.includes('localhost') ||
-      originHost.includes('127.0.0.1')
-    ) {
-      return next();
-    }
+    const parsed = new URL(origin);
+    if (parsed.host === host || trustedOrigins().has(parsed.origin.toLowerCase())) return next();
   } catch {
     /* некорректный Origin — отклоняем ниже */
   }
@@ -97,10 +123,7 @@ export function toAuthUser(employee: EmployeeAuthRecord): AuthUser {
  */
 export const requireAuth: RequestHandler = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const authHeader = req.headers.authorization;
-    const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined;
-    const cookieToken = parseCookies(req.headers.cookie)[SESSION_COOKIE];
-    const token = bearerToken || cookieToken;
+    const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
     const payload = verifySession(token);
     if (!payload) {
       return res.status(401).json({ error: 'Требуется вход в систему.', code: 'unauthorized' });
@@ -113,7 +136,7 @@ export const requireAuth: RequestHandler = async (req: Request, res: Response, n
       passwordVersion(employee.passwordHash) !== payload.pv ||
       !ROLES.includes(employee.role as Role)
     ) {
-      res.setHeader('Set-Cookie', clearedSessionCookie(req.secure));
+      res.setHeader('Set-Cookie', clearedSessionCookie(isHttps(req)));
       return res.status(401).json({ error: 'Сессия недействительна. Войдите заново.', code: 'unauthorized' });
     }
     req.user = toAuthUser(employee);

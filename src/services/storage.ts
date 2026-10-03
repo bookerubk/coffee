@@ -46,7 +46,7 @@ export const INITIAL_TENANT_ACCOUNTS: TenantAccount[] = [
 ];
 
 const STORAGE_KEYS = {
-  AUTH_TOKEN: 'coffee_app_auth_token_v1',
+  LEGACY_AUTH_TOKEN: 'coffee_app_auth_token_v1', // больше не используется, только для очистки
   USER_SESSION: 'coffee_app_user_session_v1',
   ACTIVE_ACCOUNT_ID: 'coffee_app_active_account_id_v1',
   TENANT_ACCOUNTS: 'coffee_app_tenant_accounts_v1',
@@ -114,24 +114,12 @@ export const StorageManager = {
     window.dispatchEvent(new CustomEvent('coffee-storage-change', { detail: { key: 'handbooks_sync', source: 'sync' } }));
   },
   // User Session & Authentication
-  getAuthToken(): string | null {
-    if (typeof window === 'undefined' || typeof localStorage === 'undefined') return null;
+  /** Прежняя версия хранила токен сессии в localStorage (доступен любому скрипту на странице) — стираем. */
+  purgeLegacyAuthToken(): void {
     try {
-      return localStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+      localStorage.removeItem(STORAGE_KEYS.LEGACY_AUTH_TOKEN);
     } catch {
-      return null;
-    }
-  },
-  setAuthToken(token: string | null): void {
-    if (typeof window === 'undefined' || typeof localStorage === 'undefined') return;
-    try {
-      if (token) {
-        localStorage.setItem(STORAGE_KEYS.AUTH_TOKEN, token);
-      } else {
-        localStorage.removeItem(STORAGE_KEYS.AUTH_TOKEN);
-      }
-    } catch {
-      /* ignore */
+      /* хранилище недоступно */
     }
   },
   getCurrentUser(): UserSession | null {
@@ -150,10 +138,9 @@ export const StorageManager = {
    * а защита от потери введённого.
    */
   logout(): void {
-    this.setAuthToken(null);
     setStoredItem(STORAGE_KEYS.USER_SESSION, null);
     const dataKeys = [
-      STORAGE_KEYS.AUTH_TOKEN,
+      STORAGE_KEYS.LEGACY_AUTH_TOKEN,
       STORAGE_KEYS.ACTIVE_ACCOUNT_ID,
       STORAGE_KEYS.TENANT_ACCOUNTS,
       STORAGE_KEYS.POINTS,

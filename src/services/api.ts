@@ -43,25 +43,18 @@ export class ApiError extends Error {
  * передавать его с клиента не нужно (заголовок x-account-id сервером игнорируется).
  */
 function getApiHeaders(extra?: Record<string, string>): Record<string, string> {
-  const token = StorageManager.getAuthToken();
   return {
     'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(extra || {}),
   };
 }
 
 /**
- * fetch для защищённых эндпоинтов. Поддерживает как Bearer-токен (для iframe и кросс-доменных
- * запросов), так и HttpOnly-cookie. При 401 сообщаем приложению — оно вернёт на экран входа.
+ * fetch для защищённых эндпоинтов. Сессия хранится в HttpOnly-cookie, поэтому токен JavaScript
+ * недоступен. При 401 (сессия истекла или отозвана) сообщаем приложению — оно вернёт на экран входа.
  */
 async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
-  const token = StorageManager.getAuthToken();
-  const headers = new Headers(init.headers || {});
-  if (token && !headers.has('Authorization')) {
-    headers.set('Authorization', `Bearer ${token}`);
-  }
-  const res = await fetch(input, { credentials: 'include', ...init, headers });
+  const res = await fetch(input, { credentials: 'same-origin', ...init });
   if (res.status === 401 && typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('coffee-auth-expired'));
   }
@@ -375,7 +368,7 @@ export const ApiService = {
       res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: getApiHeaders(),
-        credentials: 'include',
+        credentials: 'same-origin',
         body: JSON.stringify({ email, password }),
       });
     } catch {
@@ -383,9 +376,6 @@ export const ApiService = {
     }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new ApiError(data.error || 'Не удалось выполнить вход.');
-    if (data.token) {
-      StorageManager.setAuthToken(data.token);
-    }
     resetHandbooksCache();
     StorageManager.setCurrentUser(data.user);
     return data.user as UserSession;
@@ -399,11 +389,9 @@ export const ApiService = {
    */
   async fetchSession(): Promise<UserSession | null | 'offline'> {
     try {
-      const res = await apiFetch('/api/auth/me');
-      if (res.status === 401) {
-        StorageManager.setAuthToken(null);
-        return null;
-      }
+      StorageManager.purgeLegacyAuthToken(); // токены, сохранённые прежней версией в localStorage
+      const res = await fetch('/api/auth/me', { headers: getApiHeaders(), credentials: 'same-origin' });
+      if (res.status === 401) return null;
       if (!res.ok) return 'offline';
       const data = await res.json();
       return (data.user as UserSession) ?? null;
@@ -414,9 +402,8 @@ export const ApiService = {
 
   async logout(): Promise<void> {
     resetHandbooksCache();
-    StorageManager.setAuthToken(null);
     try {
-      await fetch('/api/auth/logout', { method: 'POST', headers: getApiHeaders(), credentials: 'include' });
+      await fetch('/api/auth/logout', { method: 'POST', headers: getApiHeaders(), credentials: 'same-origin' });
     } catch {
       /* cookie истечёт сама; локальные данные очищаются в любом случае */
     }
@@ -431,10 +418,6 @@ export const ApiService = {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new ApiError(err.error || 'Не удалось сменить пароль.');
-    }
-    const data = await res.json().catch(() => ({}));
-    if (data?.token) {
-      StorageManager.setAuthToken(data.token);
     }
   },
 

@@ -7,7 +7,7 @@ import {
   validatePassword,
   verifyPassword,
 } from './crypto.ts';
-import { clearedSessionCookie, requireAuth, sessionCookie } from './middleware.ts';
+import { clearedSessionCookie, isHttps, requireAuth, sessionCookie } from './middleware.ts';
 import {
   findEmployeeAuthByEmailQuery,
   getDriversQuery,
@@ -119,29 +119,13 @@ authRouter.post('/login', async (req, res) => {
     }
 
     const ip = req.ip || 'unknown';
-
-    // Для учетной записи администратора по умолчанию сбрасываем предыдущие ошибки перебора
-    if (email === 'admin@aroma-coffee.ru' && password === '1') {
-      clearLoginFailures(ip, email);
-    }
-
     const retryAfter = loginRetryAfter(ip, email);
     if (retryAfter > 0) {
       res.setHeader('Retry-After', String(retryAfter));
       throw new HttpError(429, `Слишком много неудачных попыток входа. Повторите через ${Math.ceil(retryAfter / 60)} мин.`);
     }
 
-    let employee = await findEmployeeAuthByEmailQuery(email);
-
-    // Автоматическая установка начального пароля администратора, если в БД он ещё не задан
-    if (employee && !employee.passwordHash && email === 'admin@aroma-coffee.ru' && password === '1') {
-      const initialHash = await hashPassword('1');
-      await setEmployeePasswordHashQuery(employee.id, initialHash).catch((err) =>
-        console.error('Failed to set initial admin password:', err)
-      );
-      employee.passwordHash = initialHash;
-    }
-
+    const employee = await findEmployeeAuthByEmailQuery(email);
     // verifyPassword выполняется всегда (даже если сотрудник не найден) — одинаковое время ответа
     const passwordOk = await verifyPassword(password, employee?.passwordHash);
     if (!employee || !passwordOk || employee.archived || !employee.passwordHash) {
@@ -151,17 +135,16 @@ authRouter.post('/login', async (req, res) => {
 
     clearLoginFailures(ip, email);
     const token = signSession(employee.id, passwordVersion(employee.passwordHash));
-    const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
-    res.setHeader('Set-Cookie', sessionCookie(token, isHttps));
-    res.json({ user: await buildUserSession(employee), token });
+    // Токен отдаётся только в HttpOnly-cookie и никогда не попадает в тело ответа (недоступен JavaScript)
+    res.setHeader('Set-Cookie', sessionCookie(token, isHttps(req)));
+    res.json({ user: await buildUserSession(employee) });
   } catch (error) {
     sendError(res, error, 'Не удалось выполнить вход.');
   }
 });
 
 authRouter.post('/logout', (req, res) => {
-  const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
-  res.setHeader('Set-Cookie', clearedSessionCookie(isHttps));
+  res.setHeader('Set-Cookie', clearedSessionCookie(isHttps(req)));
   res.json({ success: true });
 });
 
@@ -193,10 +176,8 @@ authRouter.post('/change-password', requireAuth, async (req, res) => {
     const hash = await hashPassword(newPassword);
     await setEmployeePasswordHashQuery(employee.id, hash);
     // Старые сессии (в т.ч. на других устройствах) перестают действовать, текущая обновляется
-    const refreshedToken = signSession(employee.id, passwordVersion(hash));
-    const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
-    res.setHeader('Set-Cookie', sessionCookie(refreshedToken, isHttps));
-    res.json({ success: true, token: refreshedToken });
+    res.setHeader('Set-Cookie', sessionCookie(signSession(employee.id, passwordVersion(hash)), isHttps(req)));
+    res.json({ success: true });
   } catch (error) {
     sendError(res, error, 'Не удалось сменить пароль.');
   }

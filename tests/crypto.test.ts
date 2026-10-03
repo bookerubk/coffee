@@ -21,7 +21,6 @@ test('требования к паролю', () => {
   assert.ok(c.validatePassword('        '));
   assert.ok(c.validatePassword('x'.repeat(129)));
   assert.ok(c.validatePassword(12345678));
-  assert.equal(c.validatePassword('1'), null);
   assert.equal(c.validatePassword('достаточно-длинный'), null);
 });
 
@@ -38,22 +37,18 @@ test('токен сессии: подпись, срок действия, под
   assert.equal(c.verifySession('x'.repeat(5000)), null);
 });
 
-test('секрет: слишком короткий отклоняется; при STRICT_AUTH_SECRET без секрета — ошибка', () => {
-  const saved = { secret: process.env.AUTH_SECRET, env: process.env.NODE_ENV, strict: process.env.STRICT_AUTH_SECRET };
+test('секрет: слишком короткий отклоняется; в production без секрета — ошибка', () => {
+  const saved = { secret: process.env.AUTH_SECRET, env: process.env.NODE_ENV };
   try {
     process.env.AUTH_SECRET = 'short';
     assert.throws(() => c.getAuthSecret(), /32/);
     delete process.env.AUTH_SECRET;
-    process.env.STRICT_AUTH_SECRET = 'true';
+    process.env.NODE_ENV = 'production';
     assert.throws(() => c.getAuthSecret(), /AUTH_SECRET/);
-    delete process.env.STRICT_AUTH_SECRET;
-    assert.ok(c.getAuthSecret().length >= 32);
   } finally {
     process.env.AUTH_SECRET = saved.secret;
     if (saved.env === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = saved.env;
-    if (saved.strict === undefined) delete process.env.STRICT_AUTH_SECRET;
-    else process.env.STRICT_AUTH_SECRET = saved.strict;
   }
 });
 
