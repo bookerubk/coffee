@@ -26,12 +26,23 @@ function scryptAsync(password: string, salt: Buffer, n: number, r: number, p: nu
   });
 }
 
+/**
+ * Пароли, которые перебираются первыми. Не принимаются при создании/смене пароля,
+ * а скрипт `npm run auth:audit` ищет их среди уже сохранённых.
+ */
+export const COMMON_PASSWORDS: readonly string[] = [
+  '1', '12', '123', '1234', '12345', '123456', '1234567', '12345678', '123456789', '1234567890', '12341234',
+  '11111111', '00000000', 'password', 'password1', 'passw0rd', 'admin', 'admin123', 'qwerty', 'qwerty123',
+  'qwertyui', 'coffee', 'coffee123',
+];
+
 /** Возвращает текст ошибки или null, если пароль допустим. */
 export function validatePassword(password: unknown): string | null {
   if (typeof password !== 'string') return 'Пароль должен быть строкой.';
   if (password.length < PASSWORD_MIN_LENGTH) return `Пароль должен содержать не менее ${PASSWORD_MIN_LENGTH} символов.`;
   if (password.length > PASSWORD_MAX_LENGTH) return `Пароль должен содержать не более ${PASSWORD_MAX_LENGTH} символов.`;
   if (password.trim().length === 0) return 'Пароль не может состоять только из пробелов.';
+  if (COMMON_PASSWORDS.includes(password.toLowerCase())) return 'Пароль слишком простой: выберите другой.';
   return null;
 }
 

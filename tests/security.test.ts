@@ -189,3 +189,28 @@ test('в preview-режиме CSRF-защита Origin остаётся стро
   assert.equal((await raw('POST', '/api/points', newPoint('x'), { Cookie: cookie, Origin: 'https://evil.run.app' })).status, 403);
   assert.equal((await raw('POST', '/api/points', newPoint('y'), { Cookie: cookie, Origin: base })).status, 200);
 });
+
+test('распространённые пароли («12345678», «Password», «ADMIN123») отклоняются везде', async () => {
+  for (const weak of ['12345678', 'Password', 'ADMIN123', 'qwerty123', '1234567890']) {
+    assert.ok(validatePassword(weak), weak);
+  }
+  const cookie = await bossCookie();
+  const create = await raw('POST', '/api/employees', { id: 'emp-w', name: 'Слабый', role: 'driver', email: 'w@corp.test', password: '12345678' }, { Cookie: cookie });
+  assert.equal(create.status, 400);
+  const change = await raw('POST', '/api/auth/change-password', { currentPassword: PASSWORD, newPassword: '12345678' }, { Cookie: cookie });
+  assert.equal(change.status, 400);
+  assert.equal(validatePassword('кофе-на-вынос-2026'), null); // длинные нестандартные пароли проходят
+});
+
+test('bootstrap не создаёт администратора с простым паролем из примера конфигурации', async () => {
+  const { bootstrapAdminFromEnv } = await import('../src/auth/bootstrap.ts');
+  const env = { BOOTSTRAP_ADMIN_EMAIL: 'owner@corp.test', BOOTSTRAP_ADMIN_PASSWORD: '12345678' } as NodeJS.ProcessEnv;
+  assert.equal(await bootstrapAdminFromEnv(env), 'skipped');
+  assert.equal(await q.findEmployeeAuthByEmailQuery('owner@corp.test'), null);
+});
+
+test('аудит находит пароль «12345678» у уже созданного сотрудника', async () => {
+  await q.upsertEmployeeQuery({ id: 'emp-example', accountId: 'acc-aroma', name: 'Из примера', role: 'admin', email: 'example@corp.test', archived: false, passwordHash: await hashPassword('12345678') });
+  const findings = await findWeakPasswordEmployees();
+  assert.deepEqual(findings.map((f) => [f.email, f.password]), [['example@corp.test', '12345678']]);
+});

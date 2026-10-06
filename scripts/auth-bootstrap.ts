@@ -1,9 +1,10 @@
 import 'dotenv/config';
-import { closeYdbConnection, ensureYdbSchema } from '../src/db/ydb.ts';
+import { closeYdbConnection, ensureYdbSchema, ydbConfigProblem } from '../src/db/ydb.ts';
 import { bootstrapAdminFromEnv } from '../src/auth/bootstrap.ts';
 
-if (!process.env.YDB_ENDPOINT?.trim() || !process.env.YDB_DATABASE?.trim() || !process.env.YDB_TOKEN?.trim()) {
-  console.error('Missing YDB_ENDPOINT, YDB_DATABASE, or YDB_TOKEN.');
+const configProblem = ydbConfigProblem();
+if (configProblem) {
+  console.error(configProblem);
   process.exitCode = 1;
 } else if (!process.env.BOOTSTRAP_ADMIN_EMAIL || !process.env.BOOTSTRAP_ADMIN_PASSWORD) {
   console.error('Задайте BOOTSTRAP_ADMIN_EMAIL и BOOTSTRAP_ADMIN_PASSWORD (см. .env.example).');

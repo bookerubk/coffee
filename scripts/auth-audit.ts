@@ -6,11 +6,12 @@
  * Сбрасывать нужно, если на сервере когда-либо работала версия с паролем «1» для admin@aroma-coffee.ru.
  */
 import 'dotenv/config';
-import { closeYdbConnection, upsertYdbRow } from '../src/db/ydb.ts';
+import { closeYdbConnection, upsertYdbRow, ydbConfigProblem } from '../src/db/ydb.ts';
 import { findWeakPasswordEmployees } from '../src/auth/audit.ts';
 
-if (!process.env.YDB_ENDPOINT?.trim() || !process.env.YDB_DATABASE?.trim() || !process.env.YDB_TOKEN?.trim()) {
-  console.error('Missing YDB_ENDPOINT, YDB_DATABASE, or YDB_TOKEN.');
+const configProblem = ydbConfigProblem();
+if (configProblem) {
+  console.error(configProblem);
   process.exitCode = 1;
 } else {
   try {

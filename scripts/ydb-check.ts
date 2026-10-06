@@ -1,15 +1,14 @@
 import 'dotenv/config';
-import { checkYdbConnection, closeYdbConnection } from '../src/db/ydb.ts';
+import { checkYdbConnection, closeYdbConnection, readEnv, ydbConfigProblem } from '../src/db/ydb.ts';
 
-const required = ['YDB_ENDPOINT', 'YDB_DATABASE', 'YDB_TOKEN'];
-const missing = required.filter((key) => !process.env[key]?.trim());
-if (missing.length > 0) {
-  console.error(`Missing YDB configuration: ${missing.join(', ')}`);
+const configProblem = ydbConfigProblem();
+if (configProblem) {
+  console.error(configProblem);
   process.exitCode = 1;
 } else {
   try {
     await checkYdbConnection();
-    console.log(`YDB connection is healthy: ${process.env.YDB_DATABASE}`);
+    console.log(`YDB connection is healthy: ${readEnv('YDB_DATABASE')}`);
   } catch (error) {
     console.error('YDB connection failed:', error instanceof Error ? error.message : error);
     process.exitCode = 1;

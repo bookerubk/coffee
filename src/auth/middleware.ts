@@ -128,7 +128,12 @@ export const requireAuth: RequestHandler = async (req: Request, res: Response, n
     if (!payload) {
       return res.status(401).json({ error: 'Требуется вход в систему.', code: 'unauthorized' });
     }
-    const employee = await getEmployeeAuthByIdQuery(payload.sub);
+    let employee: Awaited<ReturnType<typeof getEmployeeAuthByIdQuery>>;
+    try {
+      employee = await getEmployeeAuthByIdQuery(payload.sub);
+    } catch {
+      return res.status(503).json({ error: 'База данных недоступна. Попробуйте позже.', code: 'database_unavailable' });
+    }
     if (
       !employee ||
       employee.archived ||

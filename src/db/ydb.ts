@@ -1,12 +1,85 @@
 import { Driver } from '@ydbjs/core';
 import { AccessTokenCredentialsProvider } from '@ydbjs/auth/access-token';
+import { ServiceAccountCredentialsProvider } from '@ydbjs/auth-yandex-cloud';
+import type { ServiceAccountKey } from '@ydbjs/auth-yandex-cloud';
+import type { CredentialsProvider } from '@ydbjs/auth';
 import { query, type QueryClient } from '@ydbjs/query';
 import { fromJs } from '@ydbjs/value';
 
-function createYdbCredentialsProvider() {
-  const token = process.env.YDB_TOKEN?.trim();
+/**
+ * Значение переменной окружения без «мусора» от копирования в панель хостинга:
+ * пробелы и переводы строк по краям, обрамляющие кавычки (YDB_TOKEN="..." целиком вставляют в поле значения).
+ */
+export function readEnv(name: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  let value = env[name]?.trim();
+  if (value && value.length >= 2) {
+    const first = value[0];
+    if ((first === '"' || first === "'") && value[value.length - 1] === first) value = value.slice(1, -1).trim();
+  }
+  return value || undefined;
+}
+
+/** Описание того, чего не хватает для подключения к YDB (null — конфигурация полная). */
+export function ydbConfigProblem(env: NodeJS.ProcessEnv = process.env): string | null {
+  const missing: string[] = [];
+  if (!readEnv('YDB_ENDPOINT', env)) missing.push('YDB_ENDPOINT');
+  if (!readEnv('YDB_DATABASE', env)) missing.push('YDB_DATABASE');
+  if (!readEnv('YDB_SERVICE_ACCOUNT_KEY', env) && !readEnv('YDB_TOKEN', env)) {
+    missing.push('YDB_SERVICE_ACCOUNT_KEY (рекомендуется) или YDB_TOKEN');
+  }
+  return missing.length > 0 ? `Не заданы переменные окружения: ${missing.join(', ')}.` : null;
+}
+
+/** Ключ сервисного аккаунта: JSON authorized key целиком или его base64 (удобнее для переменных окружения). */
+export function parseServiceAccountKey(raw: string): ServiceAccountKey {
+  let text = raw.trim();
+  if (!text.startsWith('{')) text = Buffer.from(text, 'base64').toString('utf8').trim();
+  const unreadable = (cause?: unknown) =>
+    new Error(
+      'YDB_SERVICE_ACCOUNT_KEY: не удалось разобрать ключ. Вставьте содержимое authorized_key.json целиком ' +
+        'или его base64 (base64 -w0 authorized_key.json).',
+      { cause },
+    );
+  let key: ServiceAccountKey;
+  try {
+    key = JSON.parse(text);
+  } catch (cause) {
+    throw unreadable(cause);
+  }
+  // Произвольная строка после декодирования base64 иногда оказывается валидным JSON-скаляром (число, null)
+  if (typeof key !== 'object' || key === null || Array.isArray(key)) throw unreadable();
+  if (!key?.id || !key?.service_account_id || !key?.private_key) {
+    throw new Error('YDB_SERVICE_ACCOUNT_KEY: в ключе нет обязательных полей id, service_account_id, private_key.');
+  }
+  return key;
+}
+
+/** YDB_IAM_ENDPOINT принимает и полный URL, и host[:port] (как было в прежнем .env.example). */
+export function normalizeIamEndpoint(raw: string): string {
+  const url = new URL(raw.includes('://') ? raw : `https://${raw}`);
+  if (url.pathname === '/') url.pathname = '/iam/v1/tokens';
+  return url.toString();
+}
+
+/**
+ * Учётные данные YDB:
+ *  1) YDB_SERVICE_ACCOUNT_KEY — ключ сервисного аккаунта: IAM-токен получается и обновляется автоматически
+ *     (подходит для постоянной работы, в т.ч. на Vercel);
+ *  2) YDB_TOKEN — готовый IAM-токен. Он живёт около 12 часов, потом YDB отвечает UNAUTHENTICATED.
+ */
+export function createYdbCredentialsProvider(env: NodeJS.ProcessEnv = process.env): CredentialsProvider {
+  const serviceAccountKey = readEnv('YDB_SERVICE_ACCOUNT_KEY', env);
+  if (serviceAccountKey) {
+    const iamEndpoint = readEnv('YDB_IAM_ENDPOINT', env);
+    return new ServiceAccountCredentialsProvider(
+      parseServiceAccountKey(serviceAccountKey),
+      iamEndpoint ? { iamEndpoint: normalizeIamEndpoint(iamEndpoint) } : undefined,
+    );
+  }
+  // Токен не содержит пробелов: убираем случайные переносы строк и префикс «Bearer »
+  const token = readEnv('YDB_TOKEN', env)?.replace(/^Bearer\s+/i, '').replace(/\s+/g, '');
   if (!token) {
-    throw new Error('YDB_TOKEN must be configured for the @ydbjs/core driver');
+    throw new Error('Задайте YDB_SERVICE_ACCOUNT_KEY (рекомендуется) или YDB_TOKEN для подключения к YDB.');
   }
   return new AccessTokenCredentialsProvider({ token });
 }
@@ -17,10 +90,35 @@ declare global {
 }
 
 function connectionString() {
-  const endpoint = process.env.YDB_ENDPOINT;
-  const database = process.env.YDB_DATABASE;
+  const endpoint = readEnv('YDB_ENDPOINT');
+  const database = readEnv('YDB_DATABASE');
   if (!endpoint || !database) throw new Error('YDB_ENDPOINT and YDB_DATABASE must be configured');
   return `${endpoint}/?database=${encodeURIComponent(database)}`;
+}
+
+let authHintShown = false;
+
+/** Только для тестов: подсказки пишутся один раз на процесс, а тестам нужно проверять их заново. */
+export function resetYdbErrorHints() {
+  authHintShown = false;
+}
+
+/** Понятная подсказка в логах вместо голого gRPC-кода (один раз на процесс, чтобы не засорять журнал). */
+function explainYdbError(error: unknown) {
+  const code = (error as { code?: number })?.code;
+  const text = String((error as Error)?.message ?? error);
+  if (!authHintShown && (code === 16 || /UNAUTHENTICATED/.test(text))) {
+    authHintShown = true;
+    console.error(
+      '[ydb] YDB отклонил учётные данные (UNAUTHENTICATED). Если используется YDB_TOKEN — IAM-токен живёт ~12 часов ' +
+        'и мог истечь: получите новый (yc iam create-token), вставьте БЕЗ кавычек и пробелов и сделайте redeploy. ' +
+        'Для постоянной работы задайте YDB_SERVICE_ACCOUNT_KEY (ключ сервисного аккаунта) — токен будет обновляться сам.',
+    );
+  } else if (!authHintShown && (code === 7 || /PERMISSION_DENIED/.test(text))) {
+    authHintShown = true;
+    console.error('[ydb] Нет прав на базу (PERMISSION_DENIED): выдайте сервисному аккаунту роль ydb.editor на эту базу.');
+  }
+  return error;
 }
 
 export function createYdbDriver() {
@@ -41,8 +139,12 @@ export async function executeYql<T = Record<string, unknown>>(text: string, para
   for (const [name, value] of entries) {
     request = request.param(name, fromJs(value as never));
   }
-  const resultSets = await request.idempotent(true);
-  return resultSets.flat() as T[];
+  try {
+    const resultSets = await request.idempotent(true);
+    return resultSets.flat() as T[];
+  } catch (error) {
+    throw explainYdbError(error);
+  }
 }
 
 export async function ensureYdbTable(table: string, columns: string[]) {

@@ -1,8 +1,9 @@
 import 'dotenv/config';
-import { closeYdbConnection, ensureYdbSchema } from '../src/db/ydb.ts';
+import { closeYdbConnection, ensureYdbSchema, ydbConfigProblem } from '../src/db/ydb.ts';
 
-if (!process.env.YDB_ENDPOINT?.trim() || !process.env.YDB_DATABASE?.trim() || !process.env.YDB_TOKEN?.trim()) {
-  console.error('Missing YDB_ENDPOINT, YDB_DATABASE, or YDB_TOKEN.');
+const configProblem = ydbConfigProblem();
+if (configProblem) {
+  console.error(configProblem);
   process.exitCode = 1;
 } else {
   try {

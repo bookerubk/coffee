@@ -125,7 +125,13 @@ authRouter.post('/login', async (req, res) => {
       throw new HttpError(429, `Слишком много неудачных попыток входа. Повторите через ${Math.ceil(retryAfter / 60)} мин.`);
     }
 
-    const employee = await findEmployeeAuthByEmailQuery(email);
+    let employee: Awaited<ReturnType<typeof findEmployeeAuthByEmailQuery>>;
+    try {
+      employee = await findEmployeeAuthByEmailQuery(email);
+    } catch {
+      // Причина уже записана в лог слоем БД; пользователю — понятное сообщение вместо «ошибки входа»
+      throw new HttpError(503, 'База данных недоступна. Попробуйте позже или сообщите администратору.');
+    }
     // verifyPassword выполняется всегда (даже если сотрудник не найден) — одинаковое время ответа
     const passwordOk = await verifyPassword(password, employee?.passwordHash);
     if (!employee || !passwordOk || employee.archived || !employee.passwordHash) {

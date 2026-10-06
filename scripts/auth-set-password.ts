@@ -6,15 +6,16 @@
  * Все действующие сессии сотрудника после смены пароля перестают работать.
  */
 import 'dotenv/config';
-import { closeYdbConnection, ensureYdbSchema } from '../src/db/ydb.ts';
+import { closeYdbConnection, ensureYdbSchema, ydbConfigProblem } from '../src/db/ydb.ts';
 import { hashPassword, validatePassword } from '../src/auth/crypto.ts';
 import { findEmployeeAuthByEmailQuery, setEmployeePasswordHashQuery } from '../src/db/queries.ts';
 
 const [email, passwordArg] = process.argv.slice(2);
 const password = process.env.NEW_PASSWORD || passwordArg;
 
-if (!process.env.YDB_ENDPOINT?.trim() || !process.env.YDB_DATABASE?.trim() || !process.env.YDB_TOKEN?.trim()) {
-  console.error('Missing YDB_ENDPOINT, YDB_DATABASE, or YDB_TOKEN.');
+const configProblem = ydbConfigProblem();
+if (configProblem) {
+  console.error(configProblem);
   process.exitCode = 1;
 } else if (!email || !password) {
   console.error("Использование: NEW_PASSWORD='...' npm run auth:set-password -- user@company.ru");
