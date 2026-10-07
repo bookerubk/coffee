@@ -77,8 +77,21 @@
   cursor: pointer;
 }
 .workspace-tile:hover { transform: translateY(-2px); box-shadow: 0 12px 24px rgba(15, 23, 42, 0.13); }
-.workspace-tile strong, .workspace-tile small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-tile strong { font-size: 0.875rem; font-weight: 800; }
+/* Текстовый блок плитки обязан уметь сжиматься (min-width: 0), иначе длинное название вылезает за границы плитки. */
+.workspace-tile > span:last-child { min-width: 0; flex: 1 1 auto; }
+.workspace-tile small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-tile strong {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  line-height: 1.2;
+  font-size: 0.875rem;
+  font-weight: 800;
+}
+.workspace-tile-active { box-shadow: 0 0 0 3px #fbbf24, 0 12px 24px rgba(15, 23, 42, 0.18); transform: translateY(-1px); }
 .workspace-tile small { margin-top: 0.2rem; font-size: 0.75rem; opacity: 0.78; }
 .workspace-icon { display: grid; flex: 0 0 auto; place-items: center; width: 2.6rem; height: 2.6rem; border-radius: 0.85rem; background: rgba(255,255,255,0.16); }
 .workspace-icon svg { width: 1.35rem; height: 1.35rem; }

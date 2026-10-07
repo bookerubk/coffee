@@ -198,7 +198,19 @@ export const SupervisorDeliveriesView: React.FC<SupervisorDeliveriesViewProps> =
     }
   };
 
-  const getStatusBadge = (status: WaybillStatus) => {
+  // Администратор может принять поставку и без подтверждения водителя (сервер это разрешает)
+  const isAdminUser = StorageManager.getCurrentUser()?.role === 'admin';
+  const isAwaitingDriver = (wb: Waybill) => Boolean(wb.awaitingDeliveryConfirmation) && !isAdminUser;
+
+  const getStatusBadge = (status: WaybillStatus, wb?: Waybill) => {
+    if (status === 'dispatched' && wb) {
+      if (isAwaitingDriver(wb)) {
+        return <span className="px-2.5 py-1 bg-amber-100 text-amber-800 rounded-md text-xs font-semibold">В пути (ждём водителя)</span>;
+      }
+      if (wb.deliveredAt) {
+        return <span className="px-2.5 py-1 bg-blue-100 text-blue-800 rounded-md text-xs font-semibold animate-pulse">Доставлено (ожидает приёмки)</span>;
+      }
+    }
     switch (status) {
       case 'formed':
         return <span className="px-2.5 py-1 bg-stone-100 text-stone-700 rounded-md text-xs font-medium">Сформирована</span>;
@@ -282,7 +294,7 @@ export const SupervisorDeliveriesView: React.FC<SupervisorDeliveriesViewProps> =
                       </div>
                       <p className="text-xs text-stone-400 mt-0.5">Дата: {wb.date}</p>
                     </div>
-                    {getStatusBadge(wb.status)}
+                    {getStatusBadge(wb.status, wb)}
                   </div>
 
                   <div className="bg-stone-50 rounded-xl p-3 space-y-1.5 text-xs text-stone-600">
@@ -304,6 +316,19 @@ export const SupervisorDeliveriesView: React.FC<SupervisorDeliveriesViewProps> =
                         </span>
                       </div>
                     )}
+                    {wb.deliveredAt && (
+                      <div className="flex items-center justify-between">
+                        <span>Доставку подтвердил водитель:</span>
+                        <span className="font-medium text-stone-800">
+                          {new Date(wb.deliveredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                    )}
+                    {isAwaitingDriver(wb) && (
+                      <p className="rounded-lg bg-amber-50 px-2.5 py-2 text-[11px] leading-4 text-amber-900">
+                        Водитель ещё не подтвердил доставку. Приёмка станет доступна сразу после его подтверждения.
+                      </p>
+                    )}
                     {wb.receivedAt && (
                       <div className="flex items-center justify-between">
                         <span>Принято на точке:</span>
@@ -319,12 +344,12 @@ export const SupervisorDeliveriesView: React.FC<SupervisorDeliveriesViewProps> =
                   <button
                     onClick={() => openAcceptance(wb)}
                     className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer ${
-                      isDispatched
+                      isDispatched && !isAwaitingDriver(wb)
                         ? 'bg-amber-700 hover:bg-amber-800 text-white shadow-sm'
                         : 'bg-stone-100 hover:bg-stone-200 text-stone-800'
                     }`}
                   >
-                    <span>{isDispatched ? 'Сверить и принять поставку' : 'Просмотреть накладную'}</span>
+                    <span>{isDispatched && !isAwaitingDriver(wb) ? 'Сверить и принять поставку' : 'Просмотреть накладную'}</span>
                     <ChevronRight className="w-3.5 h-3.5" />
                   </button>
                 </div>
@@ -359,6 +384,12 @@ export const SupervisorDeliveriesView: React.FC<SupervisorDeliveriesViewProps> =
 
             {/* Modal Body */}
             <div className="p-4 sm:p-5 overflow-y-auto space-y-4">
+              {isAwaitingDriver(selectedWaybill) && (
+                <div role="alert" className="p-3 bg-amber-100 border border-amber-300 rounded-xl text-xs text-amber-950">
+                  <span className="font-semibold">Приёмка пока недоступна.</span> Водитель ещё не подтвердил доставку.
+                  Как только он подтвердит её в своём приложении, здесь появится кнопка «Принять поставку на точку».
+                </div>
+              )}
               <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl text-xs text-amber-900">
                 <span className="font-semibold">Инструкция приёмки:</span> Поле «Принято» по умолчанию заполнено
                 количеством отгрузки. Измените значение только у тех позиций, где выявлено расхождение. При
@@ -594,7 +625,7 @@ export const SupervisorDeliveriesView: React.FC<SupervisorDeliveriesViewProps> =
                 Закрыть
               </button>
 
-              {selectedWaybill.status === 'dispatched' && (
+              {selectedWaybill.status === 'dispatched' && !isAwaitingDriver(selectedWaybill) && (
                 <button
                   type="button"
                   disabled={!isValid || isSubmitting}

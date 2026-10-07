@@ -53,8 +53,32 @@ function getApiHeaders(extra?: Record<string, string>): Record<string, string> {
  * fetch для защищённых эндпоинтов. Сессия хранится в HttpOnly-cookie, поэтому токен JavaScript
  * недоступен. При 401 (сессия истекла или отозвана) сообщаем приложению — оно вернёт на экран входа.
  */
+let requestTimeoutMs = 30_000;
+
+/** Только для тестов. */
+export function setRequestTimeoutForTests(ms: number) {
+  requestTimeoutMs = ms;
+}
+
+function timeoutSignal(ms: number): AbortSignal {
+  if (typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal) return AbortSignal.timeout(ms);
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), ms);
+  return controller.signal;
+}
+
 async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
-  const res = await fetch(input, { credentials: 'same-origin', ...init });
+  // Без таймаута зависший сервер навсегда оставил бы экран заблокированным на время сохранения
+  const ownTimeout = !init.signal;
+  let res: Response;
+  try {
+    res = await fetch(input, { credentials: 'same-origin', ...init, signal: init.signal ?? timeoutSignal(requestTimeoutMs) });
+  } catch (error) {
+    if (ownTimeout && error instanceof DOMException && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+      throw new ApiError('Сервер не отвечает. Проверьте подключение и повторите попытку.');
+    }
+    throw error;
+  }
   if (res.status === 401 && typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('coffee-auth-expired'));
   }
@@ -329,6 +353,28 @@ function reportSyncError(message: string) {
   }
 }
 
+let blockingDepth = 0;
+
+/**
+ * Блокирует экран на время записи в БД (как при отправке заказа): пока данные сохраняются, нажать
+ * что-либо ещё нельзя. Вложенные и последовательные вызовы учитываются счётчиком.
+ */
+export async function withBlockingSave<T>(message: string, task: () => Promise<T>): Promise<T> {
+  const notify = (active: boolean) => {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('coffee-blocking-save', { detail: { active, message } }));
+    }
+  };
+  blockingDepth++;
+  notify(true);
+  try {
+    return await task();
+  } finally {
+    blockingDepth--;
+    notify(blockingDepth > 0);
+  }
+}
+
 type PersistResult = 'ok' | 'rejected' | 'offline';
 
 /**
@@ -338,6 +384,10 @@ type PersistResult = 'ok' | 'rejected' | 'offline';
  *  - 'offline' — нет связи: изменение остаётся только в этом браузере.
  */
 async function persistToServer(path: string, label: string, body: object): Promise<PersistResult> {
+  return withBlockingSave(`Сохранение: ${label}…`, () => persistToServerUnblocked(path, label, body));
+}
+
+async function persistToServerUnblocked(path: string, label: string, body: object): Promise<PersistResult> {
   try {
     const res = await apiFetch(path, {
       method: 'POST',
@@ -552,8 +602,8 @@ export const ApiService = {
       const res = await apiFetch('/api/orders', { headers: getApiHeaders() });
       if (res.ok) {
         const orders: ShiftOrder[] = await res.json();
-        // Update local mirror
-        orders.forEach((o) => StorageManager.saveOrder(o));
+        // Сервер — источник истины: кэш активного аккаунта заменяется целиком
+        StorageManager.replaceOrders(orders);
         return orders;
       }
     } catch (e) {
@@ -666,6 +716,26 @@ export const ApiService = {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new ApiError(err.error || 'Ошибка обновления статуса рейса водителем');
+    }
+
+    const waybill: Waybill = await res.json();
+    StorageManager.saveWaybill(waybill);
+    return waybill;
+  },
+
+  /**
+   * Водитель подтверждает, что груз доставлен в кофейню. До этого старший смены не может принять поставку.
+   */
+  async confirmDelivery(waybillId: string): Promise<Waybill> {
+    const res = await apiFetch(`/api/waybills/${waybillId}/deliver`, {
+      method: 'PUT',
+      headers: getApiHeaders(),
+      body: JSON.stringify({}),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new ApiError(err.error || 'Не удалось подтвердить доставку');
     }
 
     const waybill: Waybill = await res.json();
@@ -846,7 +916,7 @@ export const ApiService = {
       const res = await apiFetch('/api/waybills', { headers: getApiHeaders() });
       if (res.ok) {
         const waybills: Waybill[] = await res.json();
-        waybills.forEach((w) => StorageManager.saveWaybill(w));
+        StorageManager.replaceWaybills(waybills);
         return waybills;
       }
     } catch (e) {
@@ -855,3 +925,21 @@ export const ApiService = {
     return StorageManager.getWaybills();
   },
 };
+
+/**
+ * Записи в БД, во время которых экран блокируется. Отправка заказа (submitOrder) сюда не входит:
+ * у неё собственное окно с повтором и локальной копией.
+ */
+function blockWhileRunning(name: keyof typeof ApiService, message: string) {
+  const original = ApiService[name] as unknown as (...args: unknown[]) => Promise<unknown>;
+  (ApiService as unknown as Record<string, unknown>)[name] = (...args: unknown[]) =>
+    withBlockingSave(message, () => original.apply(ApiService, args));
+}
+
+blockWhileRunning('generateWaybillsForSlot', 'Формируем накладные…');
+blockWhileRunning('updateWaybillDispatch', 'Сохраняем отгрузку…');
+blockWhileRunning('updateDriverWaybillStatus', 'Обновляем статус рейса…');
+blockWhileRunning('confirmDelivery', 'Подтверждаем доставку…');
+blockWhileRunning('receiveWaybill', 'Фиксируем приёмку поставки…');
+blockWhileRunning('updateMyDriverStatus', 'Обновляем статус смены…');
+blockWhileRunning('createTenantAccount', 'Сохраняем аккаунт…');

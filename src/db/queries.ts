@@ -751,6 +751,8 @@ export async function getWaybillsQuery(accountId?: string) {
       dispatchedAt: toIso(w.dispatchedAt),
       receivedBy: w.receivedBy || undefined,
       receivedAt: toIso(w.receivedAt),
+      deliveredBy: w.deliveredBy || undefined,
+      deliveredAt: toIso(w.deliveredAt),
       items: asArray(w.items),
       createdAt: (toIso(w.createdAt) ?? new Date().toISOString()),
     }));
@@ -780,6 +782,8 @@ export async function upsertWaybillQuery(waybill: any) {
         dispatchedAt: waybill.dispatchedAt ? new Date(waybill.dispatchedAt) : null,
         receivedBy: waybill.receivedBy || null,
         receivedAt: waybill.receivedAt ? new Date(waybill.receivedAt) : null,
+        deliveredBy: waybill.deliveredBy || null,
+        deliveredAt: waybill.deliveredAt ? new Date(waybill.deliveredAt) : null,
         items: JSON.stringify(waybill.items || []),
         createdAt: waybill.createdAt ? new Date(waybill.createdAt) : new Date(),
       })
@@ -796,6 +800,8 @@ export async function upsertWaybillQuery(waybill: any) {
           dispatchedAt: waybill.dispatchedAt ? new Date(waybill.dispatchedAt) : null,
           receivedBy: waybill.receivedBy || null,
           receivedAt: waybill.receivedAt ? new Date(waybill.receivedAt) : null,
+          deliveredBy: waybill.deliveredBy || null,
+          deliveredAt: waybill.deliveredAt ? new Date(waybill.deliveredAt) : null,
           items: JSON.stringify(waybill.items || []),
         },
       });

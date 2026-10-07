@@ -1985,7 +1985,7 @@ Email: ${entity.email}
                     </label>
                     <input
                       type="text"
-                      placeholder="ГАЗель NEXT"
+                      placeholder="Модель автомобиля"
                       value={quickDriverVehicle}
                       onChange={(e) => setQuickDriverVehicle(e.target.value)}
                       className="w-full bg-stone-50 border border-stone-300 rounded-xl px-3 py-2 text-xs text-stone-900 outline-none"

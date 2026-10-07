@@ -503,7 +503,7 @@ export const DirectoriesView: React.FC = () => {
                   phone: '',
                   legalEntityId: legalEntities[0]?.id || '',
                   assignedWorkshopId: workshops[0]?.id || '',
-                  vehicleModel: 'ГАЗель NEXT',
+                  vehicleModel: '',
                   licensePlate: '',
                   hasRefrigerator: true,
                   status: 'active',
@@ -1095,7 +1095,7 @@ export const DirectoriesView: React.FC = () => {
                     value={editingDriver.vehicleModel}
                     onChange={(e) => setEditingDriver({ ...editingDriver, vehicleModel: e.target.value })}
                     className="w-full p-2 border rounded-lg outline-none"
-                    placeholder="ГАЗель NEXT"
+                    placeholder="Модель автомобиля"
                   />
                 </div>
                 <div>
@@ -1105,7 +1105,7 @@ export const DirectoriesView: React.FC = () => {
                     value={editingDriver.licensePlate}
                     onChange={(e) => setEditingDriver({ ...editingDriver, licensePlate: e.target.value })}
                     className="w-full p-2 font-mono border rounded-lg outline-none"
-                    placeholder="В782ОК 777"
+                    placeholder="Например: А123ВС 77"
                   />
                 </div>
               </div>

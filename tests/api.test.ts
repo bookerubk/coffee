@@ -529,3 +529,130 @@ test('bootstrap: существующему сотруднику без паро
   assert.equal(await bootstrapAdminFromEnv({ BOOTSTRAP_ADMIN_EMAIL: 'admin@aroma-coffee.ru', BOOTSTRAP_ADMIN_PASSWORD: 'bootstrap-pass-1' } as NodeJS.ProcessEnv), 'password-set');
   assert.equal((await login('admin@aroma-coffee.ru', 'bootstrap-pass-1')).status, 200);
 });
+
+// ======================= Подтверждение доставки водителем =======================
+
+async function dispatchWith(wbId: string, extra: Record<string, unknown> = {}) {
+  return call('op', 'PUT', `/api/waybills/${wbId}/dispatch`, { items: [{ productId: 'prod-1', dispatchedQuantity: 5 }], newStatus: 'dispatched', ...extra });
+}
+const goodReceive = { items: [{ productId: 'prod-1', receivedQuantity: 5 }] };
+
+test('приёмка недоступна, пока водитель не подтвердил доставку; после подтверждения — проходит', async () => {
+  const wb = await makeWaybill();
+  assert.equal((await dispatchWith(wb.id, { driverId: 'drv-1', driverName: 'Михаил Водитель' })).status, 200);
+  const recv = `/api/waybills/${wb.id}/receive`;
+
+  const early = await call('sup', 'PUT', recv, goodReceive);
+  assert.equal(early.status, 409);
+  assert.match(early.json.error, /Водитель ещё не подтвердил доставку/);
+
+  const deliver = `/api/waybills/${wb.id}/deliver`;
+  assert.equal((await call('sup', 'PUT', deliver, {})).status, 403); // кофейня не может «подтвердить за водителя»
+  assert.equal((await call('op', 'PUT', deliver, {})).status, 403);
+  assert.equal((await call('driver2', 'PUT', deliver, {})).status, 404); // чужой рейс
+
+  const confirmed = await call('driver', 'PUT', deliver, {});
+  assert.equal(confirmed.status, 200);
+  assert.ok(confirmed.json.deliveredAt);
+  assert.equal(confirmed.json.deliveredBy, 'Сотрудник driver'); // из сессии
+  assert.equal(confirmed.json.status, 'dispatched'); // приёмка — отдельный шаг старшего смены
+
+  const again = await call('driver', 'PUT', deliver, {}); // повтор безопасен, время не перезаписывается
+  assert.equal(again.status, 200);
+  assert.equal(again.json.deliveredAt, confirmed.json.deliveredAt);
+
+  const done = await call('sup', 'PUT', recv, goodReceive);
+  assert.equal(done.status, 200);
+  assert.equal(done.json.status, 'received');
+  assert.equal(done.json.deliveredAt, confirmed.json.deliveredAt); // подтверждение сохранилось в накладной
+
+  const stored = (await call('admin', 'GET', '/api/waybills')).json.find((w: any) => w.id === wb.id);
+  assert.equal(stored.deliveredBy, 'Сотрудник driver');
+});
+
+test('подтвердить доставку можно только в пути; принятую накладную — нельзя', async () => {
+  const wb = await makeWaybill();
+  const deliver = `/api/waybills/${wb.id}/deliver`;
+  // накладная ещё не отгружена, водитель её даже не видит: не назначен
+  assert.equal((await call('admin', 'PUT', deliver, {})).status, 409);
+  await dispatchWith(wb.id, { driverId: 'drv-1' });
+  await call('driver', 'PUT', deliver, {});
+  await call('sup', 'PUT', `/api/waybills/${wb.id}/receive`, goodReceive);
+  assert.equal((await call('driver', 'PUT', deliver, {})).status, 409);
+});
+
+test('без водителя или с водителем без учётной записи приёмка не блокируется', async () => {
+  // 1) рейс без водителя (самовывоз)
+  const wb1 = await makeWaybill();
+  await dispatchWith(wb1.id);
+  assert.equal((await call('sup', 'PUT', `/api/waybills/${wb1.id}/receive`, goodReceive)).status, 200);
+
+  // 2) водитель указан текстом, учётной записи водителя нет — ждать подтверждения не от кого
+  await call('sup', 'POST', '/api/orders', order({ slotId: 'evening' }));
+  const gen = await call('admin', 'POST', '/api/waybills/generate', { date: '2026-10-01', slotId: 'evening' });
+  await dispatchWith(gen.json[0].id, { driverName: 'Случайный Иван (Газель)' });
+  assert.equal((await call('sup', 'PUT', `/api/waybills/${gen.json[0].id}/receive`, goodReceive)).status, 200);
+});
+
+test('архивный водитель не блокирует приёмку, администратор принимает без подтверждения', async () => {
+  const wb = await makeWaybill();
+  await dispatchWith(wb.id, { driverId: 'drv-1' });
+  assert.equal((await call('sup', 'PUT', `/api/waybills/${wb.id}/receive`, goodReceive)).status, 409);
+  assert.equal((await call('admin', 'PUT', `/api/waybills/${wb.id}/receive`, goodReceive)).status, 200);
+
+  await q.upsertEmployeeQuery({ id: 'emp-driver', accountId: 'acc-a', name: 'Сотрудник driver', role: 'driver', email: 'driver@a.test', driverId: 'drv-1', archived: true, passwordHash: HASH });
+  await call('sup', 'POST', '/api/orders', order({ slotId: 'evening' }));
+  const gen = await call('admin', 'POST', '/api/waybills/generate', { date: '2026-10-01', slotId: 'evening' });
+  await dispatchWith(gen.json[0].id, { driverId: 'drv-1' });
+  assert.equal((await call('sup', 'PUT', `/api/waybills/${gen.json[0].id}/receive`, goodReceive)).status, 200);
+});
+
+test('карточка рейса получает адрес кофейни и данные цеха из справочников (без прошитых демо-значений)', async () => {
+  await q.upsertPointQuery({ id: 'point-1', accountId: 'acc-a', name: 'Точка point-1', address: 'ул. Кофейная, 5', assignedWorkshopId: 'ws-1', assignedEmployeeIds: [], archived: false });
+  await q.upsertWorkshopQuery({ id: 'ws-1', accountId: 'acc-a', name: 'Цех №1', legalEntityId: '', address: 'пр. Производственный, 7', chiefName: 'Пётр Шеф', phone: '+7 900 111-22-33', source: 'manual', external_id: '', archived: false });
+  const wb = await makeWaybill();
+  await dispatchWith(wb.id, { driverId: 'drv-1' });
+
+  const mine = (await call('driver', 'GET', '/api/waybills')).json[0];
+  assert.equal(mine.pointAddress, 'ул. Кофейная, 5');
+  assert.equal(mine.workshopName, 'Цех №1');
+  assert.equal(mine.workshopAddress, 'пр. Производственный, 7');
+  assert.equal(mine.workshopChiefName, 'Пётр Шеф');
+  assert.equal(mine.workshopPhone, '+7 900 111-22-33');
+  // водителю по-прежнему закрыт весь справочник цехов
+  assert.deepEqual((await call('driver', 'GET', '/api/handbooks')).json.workshops, []);
+  // и ответ на подтверждение тоже содержит эти данные
+  assert.equal((await call('driver', 'PUT', `/api/waybills/${wb.id}/deliver`, {})).json.workshopName, 'Цех №1');
+});
+
+test('/api/reset не заливает демо-данные, пока YDB_AUTO_SEED не включён', async () => {
+  const prev = process.env.YDB_AUTO_SEED;
+  try {
+    delete process.env.YDB_AUTO_SEED;
+    assert.equal((await call('admin', 'POST', '/api/reset', {})).status, 403);
+    assert.equal((await call('admin', 'GET', '/api/orders')).json.length, 0);
+    process.env.YDB_AUTO_SEED = 'true';
+    assert.equal((await call('admin', 'POST', '/api/reset', {})).status, 200);
+  } finally {
+    if (prev === undefined) delete process.env.YDB_AUTO_SEED;
+    else process.env.YDB_AUTO_SEED = prev;
+  }
+});
+
+test('флаг awaitingDeliveryConfirmation считает сервер: виден кофейне до подтверждения и пропадает после', async () => {
+  const wb = await makeWaybill();
+  await dispatchWith(wb.id, { driverId: 'drv-1' });
+  const flag = async (who: 'sup' | 'driver' | 'op') =>
+    (await call(who, 'GET', '/api/waybills')).json.find((w: any) => w.id === wb.id)?.awaitingDeliveryConfirmation;
+  assert.equal(await flag('sup'), true);
+  assert.equal(await flag('op'), true);
+  await call('driver', 'PUT', `/api/waybills/${wb.id}/deliver`, {});
+  assert.equal(await flag('sup'), false);
+
+  // рейс без водителя ничего не ждёт
+  await call('sup', 'POST', '/api/orders', order({ slotId: 'evening' }));
+  const gen = await call('admin', 'POST', '/api/waybills/generate', { date: '2026-10-01', slotId: 'evening' });
+  await dispatchWith(gen.json[0].id);
+  const solo = (await call('sup', 'GET', '/api/waybills')).json.find((w: any) => w.id === gen.json[0].id);
+  assert.equal(solo.awaitingDeliveryConfirmation, false);
+});

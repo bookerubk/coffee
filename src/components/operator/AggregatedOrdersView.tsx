@@ -83,6 +83,9 @@ export const AggregatedOrdersView: React.FC<AggregatedOrdersViewProps> = ({
     return waybills.filter((w) => w.date === selectedDate && w.slotId === selectedSlot);
   }, [waybills, selectedDate, selectedSlot]);
 
+  // Заявки, по которым накладных ещё нет (статус «отправлена»; после формирования накладной заявка получает «в сводном заказе»)
+  const pendingOrders = useMemo(() => slotOrders.filter((o) => o.status === 'submitted'), [slotOrders]);
+
   // Aggregation breakdown per SKU
   const aggregatedRows = useMemo(() => {
     const map: Record<
@@ -126,9 +129,16 @@ export const AggregatedOrdersView: React.FC<AggregatedOrdersViewProps> = ({
   const handleGenerateWaybills = async () => {
     setIsGenerating(true);
     try {
+      const knownIds = new Set(existingSlotWaybills.map((w) => w.id));
       const generated = await ApiService.generateWaybillsForSlot(selectedDate, selectedSlot, workshopId);
+      const created = generated.filter((w) => !knownIds.has(w.id)).length;
       loadData();
-      setNotification(`Сформировано ${generated.length} накладных по точкам! Переходим к комплектации.`);
+      if (created === 0) {
+        setNotification('Новых заявок без накладных нет — ничего добавлять не пришлось.');
+        setTimeout(() => setNotification(null), 3000);
+        return;
+      }
+      setNotification(`Создано накладных: ${created}. Переходим к комплектации.`);
       setTimeout(() => {
         setNotification(null);
         onNavigateToWaybills();
@@ -243,21 +253,32 @@ export const AggregatedOrdersView: React.FC<AggregatedOrdersViewProps> = ({
             </div>
           </div>
 
-          {slotOrders.length > 0 && (
+          {pendingOrders.length > 0 && (
             <button
               onClick={handleGenerateWaybills}
               disabled={isGenerating}
+              title="Накладные создаются по одной на каждую заявку кофейни. Уже созданные накладные не изменяются."
               className="w-full sm:w-auto px-4 py-2 bg-amber-700 hover:bg-amber-800 active:bg-amber-900 text-white font-semibold text-xs rounded-xl shadow transition-colors flex items-center justify-center gap-2 cursor-pointer"
             >
               <FileCheck className="w-4 h-4 shrink-0" />
               <span>
                 {existingSlotWaybills.length > 0
-                  ? 'Обновить накладные по точкам'
-                  : 'Сформировать накладные по точкам'}
+                  ? `Добавить накладные для новых заявок (${pendingOrders.length})`
+                  : `Сформировать накладные (${pendingOrders.length})`}
               </span>
             </button>
           )}
         </div>
+
+        {slotOrders.length > 0 && (
+          <p className="border-b border-stone-200 bg-stone-50/50 px-4 pb-3 text-[11px] leading-4 text-stone-500 sm:px-5">
+            {pendingOrders.length > 0
+              ? existingSlotWaybills.length > 0
+                ? 'Часть заявок поступила после первого формирования. Кнопка создаст накладные только для них — уже созданные накладные не меняются.'
+                : 'Для каждой заявки кофейни будет создана отдельная накладная для сборки и отгрузки.'
+              : 'Все заявки этого слота уже оформлены в накладные. Если кофейня пришлёт ещё одну заявку, здесь появится кнопка добавления накладной.'}
+          </p>
+        )}
 
         {aggregatedRows.length === 0 ? (
           <div className="p-12 text-center text-stone-500 text-xs space-y-2">

@@ -303,8 +303,13 @@ export const WaybillsManagementView: React.FC<WaybillsManagementViewProps> = ({
                 </div>
 
                 <div className="mt-4 pt-3 border-t border-stone-100 flex items-center justify-between">
-                  <span className="text-[11px] text-stone-400">
+                  <span className="min-w-0 pr-2 text-[11px] text-stone-400">
                     {wb.driverName ? `Транспорт: ${wb.driverName}` : 'Транспорт не назначен'}
+                    {wb.deliveredAt && (
+                      <span className="block font-semibold text-emerald-700">
+                        ✓ Доставку подтвердил водитель в {new Date(wb.deliveredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    )}
                   </span>
                   <button
                     onClick={() => openPackingModal(wb)}

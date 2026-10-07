@@ -208,13 +208,14 @@ export const YDB_TABLE_DEFINITIONS: Record<string, string[]> = {
   employees: [...auditColumns, 'name Utf8', 'role Utf8', 'point_id Utf8', 'workshop_id Utf8', 'driver_id Utf8', 'phone Utf8', 'email Utf8', 'password_hash Utf8'],
   slots: [...baseColumns, 'name Utf8', 'deadline_time Utf8', 'delivery_time Utf8', 'description Utf8', 'is_active Utf8'],
   shift_orders: [...baseColumns, 'updated_at Utf8', 'idempotency_key Utf8', 'point_id Utf8', 'point_name Utf8', 'slot_id Utf8', 'date Utf8', 'status Utf8', 'items Utf8', 'created_by Utf8', 'submitted_at Utf8'],
-  waybills: [...baseColumns, 'order_id Utf8', 'point_id Utf8', 'point_name Utf8', 'date Utf8', 'slot_id Utf8', 'status Utf8', 'driver_name Utf8', 'driver_id Utf8', 'workshop_id Utf8', 'legal_entity_id Utf8', 'dispatched_by Utf8', 'dispatched_at Utf8', 'received_by Utf8', 'received_at Utf8', 'items Utf8'],
+  waybills: [...baseColumns, 'order_id Utf8', 'point_id Utf8', 'point_name Utf8', 'date Utf8', 'slot_id Utf8', 'status Utf8', 'driver_name Utf8', 'driver_id Utf8', 'workshop_id Utf8', 'legal_entity_id Utf8', 'dispatched_by Utf8', 'dispatched_at Utf8', 'received_by Utf8', 'received_at Utf8', 'delivered_by Utf8', 'delivered_at Utf8', 'items Utf8'],
 };
 
 // Колонки, добавленные после первой версии схемы. CREATE TABLE IF NOT EXISTS не меняет уже
 // существующие таблицы, поэтому для них недостающие колонки добавляются отдельно.
 const MIGRATION_COLUMNS: Record<string, string[]> = {
   employees: ['password_hash Utf8'],
+  waybills: ['delivered_by Utf8', 'delivered_at Utf8'],
 };
 
 export async function ensureYdbColumn(table: string, columnDefinition: string) {

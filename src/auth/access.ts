@@ -88,3 +88,23 @@ export function canAccessWaybill(
       return false;
   }
 }
+
+/**
+ * Нужно ли подтверждение доставки водителем, прежде чем кофейня сможет принять поставку.
+ * Нужно, только если у накладной есть водитель, который реально может это подтвердить — то есть
+ * существует действующая учётная запись водителя, которой накладная доступна. Если водитель указан
+ * просто текстом (без учётной записи) или рейса нет вовсе, ждать подтверждения было бы не от кого,
+ * и приёмка не блокируется.
+ */
+export function requiresDeliveryConfirmation(
+  waybill: { pointId: string; workshopId?: string; driverId?: string; driverName?: string },
+  employees: { id: string; name: string; role: string; driverId?: string; archived?: boolean }[],
+  ctx: AccessContext,
+): boolean {
+  return employees.some(
+    (e) =>
+      e.role === 'driver' &&
+      !e.archived &&
+      canAccessWaybill({ id: e.id, accountId: '', name: e.name, role: 'driver', driverId: e.driverId }, waybill, ctx),
+  );
+}

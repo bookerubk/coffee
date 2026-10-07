@@ -10,6 +10,7 @@ import {
 import { StorageManager } from '../../services/storage';
 import { ApiService, getSlotDeadlineDetails, getOperationalTimeParts, syncServerTime } from '../../services/api';
 import { SavingOverlayModal } from './SavingOverlayModal';
+import { useVisualViewport } from '../../hooks/useVisualViewport';
 import {
   Plus,
   Minus,
@@ -45,6 +46,14 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
   const [selectedCategory, setSelectedCategory] = useState<string>('Все');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isCatalogOpen, setIsCatalogOpen] = useState(false);
+  const viewport = useVisualViewport(isCatalogOpen);
+
+  // Пока каталог открыт, страница под ним не прокручивается
+  useEffect(() => {
+    if (!isCatalogOpen) return;
+    document.body.classList.add('modal-open');
+    return () => document.body.classList.remove('modal-open');
+  }, [isCatalogOpen]);
 
   // Critical Section 4.2 State Machine
   const [saveState, setSaveState] = useState<SaveState>('IDLE');
@@ -607,22 +616,53 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
       </section>
 
       {isCatalogOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-stone-950/45 p-0 sm:p-6" role="dialog" aria-modal="true" aria-labelledby="catalog-title">
-          <div className="flex max-h-[90vh] w-full max-w-3xl flex-col rounded-t-2xl bg-stone-50 shadow-2xl sm:rounded-2xl">
-            <div className="flex items-center justify-between border-b border-stone-200 bg-white px-5 py-4">
-              <div><h2 id="catalog-title" className="text-lg font-bold text-stone-900">Выберите номенклатуру</h2><p className="text-sm text-stone-500">Количество можно изменить после добавления.</p></div>
-              <button type="button" onClick={() => setIsCatalogOpen(false)} className="rounded-lg px-3 py-2 text-sm font-medium text-stone-600 hover:bg-stone-100">Закрыть</button>
+        <div
+          className="fixed inset-x-0 top-[var(--vv-top)] z-50 flex h-[var(--vv-height)] justify-center bg-stone-950/45 sm:inset-0 sm:top-0 sm:h-auto sm:items-center sm:p-6"
+          style={{ '--vv-top': `${viewport.offsetTop}px`, '--vv-height': `${viewport.height}px` } as React.CSSProperties}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="catalog-title"
+        >
+          {/* На телефоне окно занимает всю ВИДИМУЮ область (клавиатура её уменьшает, а не перекрывает) */}
+          <div className="flex h-full w-full max-w-3xl flex-col bg-stone-50 shadow-2xl sm:h-auto sm:max-h-[90vh] sm:rounded-2xl">
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-stone-200 bg-white px-4 py-3 sm:px-5 sm:py-4">
+              <div className="min-w-0">
+                <h2 id="catalog-title" className="text-base font-bold text-stone-900 sm:text-lg">Выберите номенклатуру</h2>
+                {!viewport.keyboardOpen && <p className="text-xs text-stone-500 sm:text-sm">Количество можно изменить после добавления.</p>}
+              </div>
+              <button type="button" onClick={() => setIsCatalogOpen(false)} className="shrink-0 rounded-lg bg-stone-100 px-3 py-2 text-sm font-semibold text-stone-700 hover:bg-stone-200">Готово</button>
             </div>
-            <div className="space-y-4 overflow-y-auto p-4 sm:p-5">
-              <div className="flex flex-col gap-3 sm:flex-row">
-                <div className="flex gap-2 overflow-x-auto pb-1">
-                  {categories.map((cat) => <button key={cat} type="button" onClick={() => setSelectedCategory(cat)} className={`shrink-0 rounded-lg px-3 py-2 text-sm font-medium ${selectedCategory === cat ? 'bg-amber-800 text-white' : 'bg-white text-stone-600 border border-stone-200'}`}>{cat}</button>)}
+
+            {/* Поиск и категории закреплены вверху и не прокручиваются вместе со списком */}
+            <div className="shrink-0 space-y-2 border-b border-stone-200 bg-white px-4 py-3 shadow-sm sm:px-5">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
+                <input
+                  type="search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} // «Поиск» на клавиатуре убирает её, и виден весь список
+                  enterKeyHint="search"
+                  autoComplete="off"
+                  placeholder="Поиск по названию или SKU"
+                  className="w-full rounded-lg border border-stone-200 bg-stone-50 py-2.5 pl-9 pr-3 text-base outline-none focus:ring-2 focus:ring-amber-600 sm:text-sm"
+                />
+              </div>
+              <div className="flex gap-2 overflow-x-auto pb-0.5">
+                {categories.map((cat) => <button key={cat} type="button" onClick={() => setSelectedCategory(cat)} className={`shrink-0 rounded-lg px-3 py-1.5 text-sm font-medium ${selectedCategory === cat ? 'bg-amber-800 text-white' : 'bg-white text-stone-600 border border-stone-200'}`}>{cat}</button>)}
+              </div>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 sm:p-5">
+              {filteredProducts.length === 0 ? (
+                <p className="py-8 text-center text-sm text-stone-500">
+                  {products.length === 0 ? 'В справочнике пока нет номенклатуры. Её добавляет администратор.' : 'Ничего не найдено. Измените запрос или категорию.'}
+                </p>
+              ) : (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {filteredProducts.map((product) => <button key={product.id} type="button" onClick={() => { if (!(quantities[product.id] || 0)) handleQuantityChange(product.id, 1); }} className={`flex items-center justify-between gap-3 rounded-xl border p-4 text-left transition-colors ${quantities[product.id] ? 'border-amber-300 bg-amber-50' : 'border-stone-200 bg-white hover:border-amber-300'}`}><span className="min-w-0"><span className="block font-semibold text-stone-900">{product.name}</span><span className="mt-1 block text-xs text-stone-500">{product.sku} · {product.unit}</span></span><span className="shrink-0 text-sm font-bold text-amber-800">{quantities[product.id] ? 'Добавлено' : 'Добавить'}</span></button>)}
                 </div>
-                <div className="relative shrink-0 sm:w-64"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" /><input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Поиск по названию или SKU" className="w-full rounded-lg border border-stone-200 bg-white py-2.5 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-amber-600" /></div>
-              </div>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {filteredProducts.map((product) => <button key={product.id} type="button" onClick={() => { if (!(quantities[product.id] || 0)) handleQuantityChange(product.id, 1); }} className={`flex items-center justify-between gap-3 rounded-xl border p-4 text-left transition-colors ${quantities[product.id] ? 'border-amber-300 bg-amber-50' : 'border-stone-200 bg-white hover:border-amber-300'}`}><span><span className="block font-semibold text-stone-900">{product.name}</span><span className="mt-1 block text-xs text-stone-500">{product.sku} · {product.unit}</span></span><span className="text-sm font-bold text-amber-800">{quantities[product.id] ? 'Добавлено' : 'Добавить'}</span></button>)}
-              </div>
+              )}
             </div>
           </div>
         </div>

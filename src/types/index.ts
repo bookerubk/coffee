@@ -208,6 +208,17 @@ export interface Waybill {
   driverId?: string;
   workshopId?: string;
   legalEntityId?: string;
+  /** Водитель подтвердил, что груз доставлен в кофейню. До этого старший смены не может принять поставку. */
+  deliveredAt?: string;
+  deliveredBy?: string;
+  /** Справочные данные для карточки рейса: подставляются сервером из справочников, в БД накладной не хранятся. */
+  pointAddress?: string;
+  workshopName?: string;
+  workshopAddress?: string;
+  workshopPhone?: string;
+  workshopChiefName?: string;
+  /** Ждём подтверждения доставки водителем: приёмка кофейней пока недоступна. Вычисляется сервером. */
+  awaitingDeliveryConfirmation?: boolean;
 }
 
 export interface DiscrepancyRecord {

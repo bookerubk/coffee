@@ -118,3 +118,18 @@ test('аутентификация: пароль не попадает в обы
   await q.upsertEmployeeQuery({ id: 'e1', accountId: 'acc-a', name: 'А2', role: 'admin', email: 'a@a.test' });
   assert.equal((await q.getEmployeeAuthByIdQuery('e1'))?.passwordHash, 'scrypt$secret');
 });
+
+test('миграция: колонки подтверждения доставки добавляются в существующую таблицу waybills', async () => {
+  resetFakeYdb();
+  createLegacyTable('waybills', ['id Utf8', 'account_id Utf8', 'created_at Utf8', 'updated_at Utf8', 'archived Utf8', 'order_id Utf8', 'point_id Utf8', 'point_name Utf8', 'date Utf8', 'slot_id Utf8', 'status Utf8', 'driver_name Utf8', 'driver_id Utf8', 'workshop_id Utf8', 'legal_entity_id Utf8', 'dispatched_by Utf8', 'dispatched_at Utf8', 'received_by Utf8', 'received_at Utf8', 'items Utf8']);
+  await ensureYdbSchema();
+  await ensureYdbSchema(); // повторный запуск безопасен
+  await q.upsertWaybillQuery({ id: 'WB-D', accountId: 'acc-a', orderId: 'o', pointId: 'p', pointName: 'P', date: '2026-10-01', slotId: 'morning', status: 'dispatched', items: [], deliveredAt: '2026-10-01T09:30:00.000Z', deliveredBy: 'Водитель' });
+  const [w] = await q.getWaybillsQuery('acc-a');
+  assert.equal(w.deliveredAt, '2026-10-01T09:30:00.000Z');
+  assert.equal(w.deliveredBy, 'Водитель');
+  // последующее сохранение (например, приёмка) не стирает подтверждение доставки
+  await q.upsertWaybillQuery({ ...w, status: 'received', receivedAt: '2026-10-01T09:40:00.000Z' });
+  const [after] = await q.getWaybillsQuery('acc-a');
+  assert.equal(after.deliveredAt, '2026-10-01T09:30:00.000Z');
+});

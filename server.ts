@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import { ensureYdbSchema, selectYdbRows, YDB_TABLES } from './src/db/ydb.ts';
+import { ensureYdbSchema, selectYdbRows, YDB_TABLES, ydbConfigProblem } from './src/db/ydb.ts';
 import { HttpError, sendError } from './src/http-errors.ts';
 import { authRouter } from './src/auth/routes.ts';
 import { requireAuth, requireRole, sameOriginGuard, securityHeaders } from './src/auth/middleware.ts';
@@ -12,6 +12,7 @@ import {
   canAccessOrder,
   canAccessPoint,
   canAccessWaybill,
+  requiresDeliveryConfirmation,
   resolveDriverId,
   supervisorPointIds,
 } from './src/auth/access.ts';
@@ -133,6 +134,22 @@ app.get('/api/time', (req, res) => {
     dateFormatted,
     utcTime: now.toISOString().substring(11, 19),
   });
+});
+
+// На Vercel сервер не запускается как процесс, и схема БД сама не обновляется. Если включён YDB_AUTO_SCHEMA=true,
+// первый запрос каждого экземпляра функции один раз проверяет схему: создаёт недостающие таблицы и добавляет
+// новые колонки (миграции идемпотентны). Без этого после обновления с новыми колонками записи падали бы
+// до ручного `npm run ydb:schema`.
+let schemaReady: Promise<void> | undefined;
+app.use('/api', async (_req, _res, next) => {
+  if (process.env.YDB_AUTO_SCHEMA === 'true' && process.env.VERCEL === '1' && !ydbConfigProblem()) {
+    schemaReady ??= ensureYdbSchema().catch((error) => {
+      console.error('Автоматическое обновление схемы БД не удалось:', error);
+      schemaReady = undefined; // следующий запрос попробует снова
+    });
+    await schemaReady;
+  }
+  next();
 });
 
 // ---------------------------------------------------------------------------
@@ -531,6 +548,42 @@ app.post('/api/orders', requireRole('admin', 'shift_supervisor'), async (req, re
 // ---------------------------------------------------------------------------
 const FINISHED_WAYBILL = new Set(['received', 'received_with_discrepancies']);
 
+/**
+ * Справочные данные для карточки рейса (адрес кофейни, цех и его контакты). Подставляются из справочников
+ * на лету, в накладной не хранятся — поэтому водителю не нужен доступ ко всему справочнику цехов.
+ */
+async function withDetails(accountId: string, list: any[]): Promise<any[]> {
+  if (list.length === 0) return list;
+  try {
+    const [points, workshops, employees, drivers] = await Promise.all([
+      getPointsQuery(accountId),
+      getWorkshopsQuery(accountId),
+      getEmployeesQuery(accountId),
+      getDriversQuery(accountId),
+    ]);
+    const pointById = new Map<string, any>(points.map((p: any) => [p.id, p]));
+    const workshopById = new Map<string, any>(workshops.map((w: any) => [w.id, w]));
+    return list.map((w: any) => {
+      const point = pointById.get(w.pointId);
+      const workshop = workshopById.get(w.workshopId || point?.assignedWorkshopId);
+      return {
+        ...w,
+        pointAddress: point?.address || undefined,
+        workshopName: workshop?.name || undefined,
+        workshopAddress: workshop?.address || undefined,
+        workshopPhone: workshop?.phone || undefined,
+        workshopChiefName: workshop?.chiefName || undefined,
+        // То же правило, по которому сервер отклонит приёмку: интерфейс не должен его угадывать
+        awaitingDeliveryConfirmation:
+          w.status === 'dispatched' && !w.deliveredAt && requiresDeliveryConfirmation(w, employees, { points, drivers }),
+      };
+    });
+  } catch (error) {
+    console.error('Не удалось дополнить накладные справочными данными:', error);
+    return list; // карточка рейса откроется и без адресов
+  }
+}
+
 /** Накладная, доступная пользователю. Чужую или несуществующую не различаем (404). */
 async function findWaybillFor(user: AuthUser, id: string) {
   const [waybills, ctx] = await Promise.all([getWaybillsQuery(user.accountId), loadAccessContext(user.accountId)]);
@@ -543,7 +596,7 @@ app.get('/api/waybills', async (req, res) => {
   try {
     const user = req.user!;
     const [waybills, ctx] = await Promise.all([getWaybillsQuery(user.accountId), loadAccessContext(user.accountId)]);
-    res.json(waybills.filter((w: any) => canAccessWaybill(user, w, ctx)));
+    res.json(await withDetails(user.accountId, waybills.filter((w: any) => canAccessWaybill(user, w, ctx))));
   } catch (error: any) {
     sendError(res, error, 'Не удалось получить накладные.');
   }
@@ -619,7 +672,10 @@ app.post('/api/waybills/generate', requireRole('admin', 'production_operator'), 
 
     const [updatedList, ctx] = await Promise.all([getWaybillsQuery(accountId), loadAccessContext(accountId)]);
     res.json(
-      updatedList.filter((w: any) => w.date === date && w.slotId === slotId && canAccessWaybill(user, w, ctx))
+      await withDetails(
+        accountId,
+        updatedList.filter((w: any) => w.date === date && w.slotId === slotId && canAccessWaybill(user, w, ctx)),
+      ),
     );
   } catch (error: any) {
     sendError(res, error, 'Не удалось сформировать накладные.');
@@ -687,9 +743,32 @@ app.put('/api/waybills/:id/dispatch', requireRole('admin', 'production_operator'
     }
 
     await upsertWaybillQuery(waybill);
-    res.json(waybill);
+    res.json((await withDetails(user.accountId, [waybill]))[0]);
   } catch (error: any) {
     sendError(res, error, 'Не удалось обновить отгрузку.');
+  }
+});
+
+// Водитель подтверждает, что груз доставлен в кофейню. До этого момента приёмка поставки недоступна.
+app.put('/api/waybills/:id/deliver', requireRole('admin', 'driver'), async (req, res) => {
+  try {
+    const user = req.user!;
+    const { waybill } = await findWaybillFor(user, req.params.id);
+    if (FINISHED_WAYBILL.has(waybill.status)) {
+      throw new HttpError(409, 'Накладная уже принята.');
+    }
+    if (waybill.status !== 'dispatched') {
+      throw new HttpError(409, 'Подтвердить доставку можно только после выезда: накладная ещё не в пути.');
+    }
+    // Повторное нажатие (двойной тап, повтор после обрыва связи) безопасно: время первого подтверждения сохраняется
+    if (!waybill.deliveredAt) {
+      waybill.deliveredAt = new Date().toISOString();
+      waybill.deliveredBy = user.name; // из сессии, а не из тела запроса
+      await upsertWaybillQuery(waybill);
+    }
+    res.json((await withDetails(user.accountId, [waybill]))[0]);
+  } catch (error: any) {
+    sendError(res, error, 'Не удалось подтвердить доставку.');
   }
 });
 
@@ -725,7 +804,7 @@ app.put('/api/waybills/:id/driver-status', requireRole('admin', 'driver'), async
     if (status) waybill.status = status;
 
     await upsertWaybillQuery(waybill);
-    res.json(waybill);
+    res.json((await withDetails(user.accountId, [waybill]))[0]);
   } catch (error: any) {
     sendError(res, error, 'Не удалось обновить статус рейса.');
   }
@@ -737,9 +816,16 @@ app.put('/api/waybills/:id/receive', requireRole('admin', 'shift_supervisor'), a
     const { items } = req.body ?? {};
     if (!Array.isArray(items)) throw new HttpError(400, 'Не переданы позиции приёмки.');
 
-    const { waybill } = await findWaybillFor(user, req.params.id);
+    const { waybill, ctx } = await findWaybillFor(user, req.params.id);
     if (waybill.status !== 'dispatched') {
       throw new HttpError(409, 'Принять можно только отгруженную накладную, которая ещё не принята.');
+    }
+    // Поставку принимают после того, как водитель подтвердил доставку (администратор может принять и без этого)
+    if (user.role !== 'admin' && !waybill.deliveredAt) {
+      const employees = await getEmployeesQuery(user.accountId);
+      if (requiresDeliveryConfirmation(waybill, employees, ctx)) {
+        throw new HttpError(409, 'Водитель ещё не подтвердил доставку. Приёмка станет доступна после его подтверждения.');
+      }
     }
 
     // Validate quantities and reasons
@@ -789,7 +875,7 @@ app.put('/api/waybills/:id/receive', requireRole('admin', 'shift_supervisor'), a
     waybill.receivedBy = user.name; // из сессии, а не из тела запроса
 
     await upsertWaybillQuery(waybill);
-    res.json(waybill);
+    res.json((await withDetails(user.accountId, [waybill]))[0]);
   } catch (error: any) {
     sendError(res, error, 'Не удалось принять накладную.');
   }
@@ -798,6 +884,10 @@ app.put('/api/waybills/:id/receive', requireRole('admin', 'shift_supervisor'), a
 // Seed / Reset (идемпотентное наполнение демо-данными — только администратор)
 app.post('/api/reset', adminOnly, async (req, res) => {
   try {
+    // Демо-данные в рабочую базу не заливаем, пока они явно не включены (YDB_AUTO_SEED=true)
+    if (process.env.YDB_AUTO_SEED !== 'true') {
+      throw new HttpError(403, 'Демо-данные отключены (YDB_AUTO_SEED не равен true).');
+    }
     await seedDatabaseIfEmpty();
     res.json({ success: true });
   } catch (error: any) {

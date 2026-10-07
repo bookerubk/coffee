@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { UserRole, CoffeePoint, SlotId, UserSession } from '../types';
 import { getOperationalTimeParts, syncServerTime } from '../services/api';
+import { defaultViewFor, getWorkspaceTiles } from '../navigation';
+import type { TileIcon } from '../navigation';
 import {
   Coffee,
   Factory,
@@ -13,6 +15,15 @@ import {
   KeyRound,
   Database,
 } from 'lucide-react';
+
+const TILE_ICONS: Record<TileIcon, React.ElementType> = {
+  layers: Layers,
+  database: Database,
+  file: FileSpreadsheet,
+  truck: Truck,
+  factory: Factory,
+  coffee: Coffee,
+};
 
 interface HeaderProps {
   currentRole: UserRole;
@@ -108,7 +119,7 @@ export const Header: React.FC<HeaderProps> = ({
           {isAdmin ? (
             <div className="grid min-w-0 flex-1 grid-cols-4 items-stretch gap-1 rounded-xl bg-stone-200/70 p-1">
               {[['admin', 'Админ', ShieldCheck], ['shift_supervisor', 'Кофейня', Coffee], ['production_operator', 'Цех', Factory], ['driver', 'Водитель', Truck]].map(([role, label, Icon]) => (
-                <button key={role as string} onClick={() => { onRoleChange(role as UserRole); onSubViewChange(role === 'admin' ? 'legal_entities' : role === 'shift_supervisor' ? 'order' : role === 'production_operator' ? 'summary' : 'deliveries'); }} className={`flex min-w-0 items-center justify-center gap-1 rounded-lg px-1.5 py-2 text-[11px] font-semibold leading-tight transition-all sm:px-2 sm:text-xs ${currentRole === role ? 'bg-white text-stone-900 shadow-xs font-bold' : 'text-stone-600 hover:text-stone-900'}`}>
+                <button key={role as string} onClick={() => { onRoleChange(role as UserRole); onSubViewChange(defaultViewFor(role as UserRole)); }} className={`flex min-w-0 items-center justify-center gap-1 rounded-lg px-1.5 py-2 text-[11px] font-semibold leading-tight transition-all sm:px-2 sm:text-xs ${currentRole === role ? 'bg-white text-stone-900 shadow-xs font-bold' : 'text-stone-600 hover:text-stone-900'}`}>
                   <Icon className="hidden size-3.5 shrink-0 sm:block" />
                   <span className="whitespace-nowrap">{label as string}</span>
                   {role === 'production_operator' && hasNewAggregatedOrder && <span className="size-1.5 shrink-0 rounded-full bg-amber-500" aria-label="Есть новые заказы" />}
@@ -124,204 +135,61 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Role-specific quick actions: global navigation stays in the role tabs below. */}
-      <div className="border-t border-slate-100 bg-[#f7f8f6] px-4 py-3">
+      {/* Единственное меню: плитки по ролям. Раньше под ними дублировалась строка вкладок с теми же разделами. */}
+      <nav aria-label="Разделы" className="border-t border-slate-100 bg-[#f7f8f6] px-4 py-3">
         <div className="mx-auto grid max-w-7xl grid-cols-2 gap-2 sm:flex sm:gap-3">
-          {currentRole === 'admin' && (
-            <>
-              <button onClick={() => onSubViewChange('legal_entities')} className="workspace-tile workspace-tile-emerald">
-                <span className="workspace-icon"><Layers aria-hidden="true" /></span>
-                <span><strong>Рабочая область</strong><small>Текущие задачи</small></span>
-              </button>
-              <button onClick={() => onSubViewChange('directories')} className="workspace-tile workspace-tile-violet">
-                <span className="workspace-icon"><Database aria-hidden="true" /></span>
-                <span><strong>Справочники</strong><small>Единый каталог</small></span>
-              </button>
-              <button onClick={() => onSubViewChange('discrepancies')} className="workspace-tile workspace-tile-blue">
-                <span className="workspace-icon"><FileSpreadsheet aria-hidden="true" /></span>
-                <span><strong>Проверка данных</strong><small>Контроль документов</small></span>
-              </button>
-            </>
-          )}
-
-          {currentRole === 'shift_supervisor' && (
-            <>
-              <button onClick={() => onSubViewChange('order')} className="workspace-tile workspace-tile-emerald">
-                <span className="workspace-icon"><Layers aria-hidden="true" /></span>
-                <span><strong>Создание заявки</strong><small>Потребности кофейни</small></span>
-              </button>
-              <button onClick={() => onSubViewChange('deliveries')} className="workspace-tile workspace-tile-violet">
-                <span className="workspace-icon"><Truck aria-hidden="true" /></span>
-                <span><strong>Мои заказы</strong><small>Статус и приёмка</small></span>
-              </button>
-              <button onClick={() => onSubViewChange('order')} className="workspace-tile workspace-tile-blue">
-                <span className="workspace-icon"><Coffee aria-hidden="true" /></span>
-                <span><strong>Смена</strong><small>Рабочие задачи</small></span>
-              </button>
-            </>
-          )}
-
-          {currentRole === 'production_operator' && (
-            <>
-              <button onClick={() => onSubViewChange('summary')} className="workspace-tile workspace-tile-emerald">
-                <span className="workspace-icon"><Truck aria-hidden="true" /></span>
-                <span><strong>Приёмка поставок</strong><small>Сверка заказов</small></span>
-              </button>
-              <button onClick={() => onSubViewChange('summary')} className="workspace-tile workspace-tile-violet">
-                <span className="workspace-icon"><Factory aria-hidden="true" /></span>
-                <span><strong>Выпуск продукции</strong><small>Задания цеха</small></span>
-              </button>
-              <button onClick={() => onSubViewChange('waybills')} className="workspace-tile workspace-tile-blue">
-                <span className="workspace-icon"><FileSpreadsheet aria-hidden="true" /></span>
-                <span><strong>Списание</strong><small>Документы цеха</small></span>
-              </button>
-            </>
-          )}
-
-          {currentRole === 'driver' && (
-            <>
-              <button onClick={() => onSubViewChange('deliveries')} className="workspace-tile workspace-tile-emerald">
-                <span className="workspace-icon"><Truck aria-hidden="true" /></span>
-                <span><strong>Мой маршрут</strong><small>Доставки на сегодня</small></span>
-              </button>
-              <button onClick={() => onSubViewChange('deliveries')} className="workspace-tile workspace-tile-violet">
-                <span className="workspace-icon"><FileSpreadsheet aria-hidden="true" /></span>
-                <span><strong>Подтвердить доставку</strong><small>Статус рейса</small></span>
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Role Sub-Navigation Bar */}
-      <div className="bg-white border-t border-slate-100 px-4 py-2">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          {/* Sub tabs per role */}
-          <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1 sm:pb-0 max-w-full">
-            {currentRole === 'shift_supervisor' && (
-              <>
-                <button
-                  onClick={() => onSubViewChange('order')}
-                  className={`shrink-0 whitespace-nowrap px-3 py-1.5 sm:py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-                    activeSubView === 'order'
-                      ? 'bg-stone-900 text-white font-bold'
-                      : 'text-stone-600 hover:bg-stone-200'
-                  }`}
-                >
-                  📝 Создание заявки
-                </button>
-                <button
-                  onClick={() => onSubViewChange('deliveries')}
-                  className={`shrink-0 whitespace-nowrap px-3 py-1.5 sm:py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-                    activeSubView === 'deliveries'
-                      ? 'bg-stone-900 text-white font-bold'
-                      : 'text-stone-600 hover:bg-stone-200'
-                  }`}
-                >
-                  🚚 Приёмка поставок (сверка)
-                </button>
-              </>
-            )}
-
-            {currentRole === 'production_operator' && (
-              <>
-                <button
-                  onClick={() => onSubViewChange('summary')}
-                  className={`shrink-0 whitespace-nowrap px-3 py-1.5 sm:py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-                    activeSubView === 'summary'
-                      ? 'bg-stone-900 text-white font-bold'
-                      : 'text-stone-600 hover:bg-stone-200'
-                  }`}
-                >
-                  📦 Сводный заказ цеха
-                </button>
-                <button
-                  onClick={() => onSubViewChange('waybills')}
-                  className={`shrink-0 whitespace-nowrap px-3 py-1.5 sm:py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-                    activeSubView === 'waybills'
-                      ? 'bg-stone-900 text-white font-bold'
-                      : 'text-stone-600 hover:bg-stone-200'
-                  }`}
-                >
-                  📋 Накладные отгрузки
-                </button>
-              </>
-            )}
-
-            {currentRole === 'driver' && (
+          {getWorkspaceTiles(currentRole).map((tile) => {
+            const Icon = TILE_ICONS[tile.icon];
+            const isActive = activeSubView === tile.view;
+            return (
               <button
-                onClick={() => onSubViewChange('deliveries')}
-                className="shrink-0 whitespace-nowrap px-3 py-1.5 sm:py-1 rounded-lg text-xs font-bold bg-amber-800 text-white"
+                key={tile.view}
+                type="button"
+                onClick={() => onSubViewChange(tile.view)}
+                aria-current={isActive ? 'page' : undefined}
+                className={`workspace-tile workspace-tile-${tile.color}${isActive ? ' workspace-tile-active' : ''}`}
               >
-                🚚 Маршрутный лист и доставки
+                <span className="workspace-icon"><Icon aria-hidden="true" /></span>
+                <span>
+                  <strong>{tile.title}</strong>
+                  <small>{tile.subtitle}</small>
+                </span>
               </button>
-            )}
+            );
+          })}
+        </div>
+      </nav>
 
-            {currentRole === 'admin' && (
-              <>
-                <button
-                  onClick={() => onSubViewChange('legal_entities')}
-                  className={`shrink-0 whitespace-nowrap px-3 py-1.5 sm:py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-                    activeSubView === 'legal_entities'
-                      ? 'bg-amber-800 text-white font-bold'
-                      : 'text-stone-600 hover:bg-stone-200'
-                  }`}
-                >
-                  🏢 Аккаунты юрлиц (привязка объектов)
-                </button>
-                <button
-                  onClick={() => onSubViewChange('discrepancies')}
-                  className={`shrink-0 whitespace-nowrap px-3 py-1.5 sm:py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-                    activeSubView === 'discrepancies'
-                      ? 'bg-stone-900 text-white font-bold'
-                      : 'text-stone-600 hover:bg-stone-200'
-                  }`}
-                >
-                  📊 Сводка расхождений (3 точки контроля)
-                </button>
-                <button
-                  onClick={() => onSubViewChange('directories')}
-                  className={`shrink-0 whitespace-nowrap px-3 py-1.5 sm:py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-                    activeSubView === 'directories'
-                      ? 'bg-stone-900 text-white font-bold'
-                      : 'text-stone-600 hover:bg-stone-200'
-                  }`}
-                >
-                  📚 Справочники НСИ (1С / ERP)
-                </button>
-              </>
+      {/* Кофейня: администратор выбирает любую, старший смены видит свою (закреплена за ним) */}
+      {currentRole === 'shift_supervisor' && (
+        <div className="border-t border-slate-100 bg-white px-4 py-2">
+          <div className="mx-auto flex max-w-7xl items-center gap-2 text-xs">
+            <span className="shrink-0 font-medium text-stone-400">Кофейня:</span>
+            {isAdmin ? (
+              <select
+                value={currentPoint.id}
+                onChange={(e) => {
+                  const pt = points.find((p) => p.id === e.target.value);
+                  if (pt) onPointChange(pt);
+                }}
+                className="min-w-0 max-w-full cursor-pointer rounded-lg border border-stone-300 bg-white px-2.5 py-1 text-xs font-semibold text-stone-800 outline-none focus:ring-2 focus:ring-amber-600"
+              >
+                {points.length === 0 && <option value="">Нет кофеен</option>}
+                {points.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className="flex min-w-0 items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-900">
+                <MapPin className="size-3 shrink-0 text-amber-700" />
+                <span className="truncate">{currentPoint.name || 'Не назначена'}</span>
+              </span>
             )}
           </div>
-
-          {/* Point Switcher (Allowed for Admin, locked to assigned cafe for Shift Supervisor) */}
-          {currentRole === 'shift_supervisor' && (
-            <div className="flex items-center gap-2 text-xs shrink-0">
-              <span className="text-stone-400 font-medium">Кофейня:</span>
-              {isAdmin ? (
-                <select
-                  value={currentPoint.id}
-                  onChange={(e) => {
-                    const pt = points.find((p) => p.id === e.target.value);
-                    if (pt) onPointChange(pt);
-                  }}
-                  className="max-w-full bg-white border border-stone-300 rounded-lg px-2.5 py-1 font-semibold text-stone-800 text-xs focus:ring-2 focus:ring-amber-600 outline-none cursor-pointer"
-                >
-                  {points.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <span className="bg-amber-50 text-amber-900 border border-amber-200 rounded-lg px-2.5 py-1 font-bold text-xs flex items-center gap-1">
-                  <MapPin className="w-3 h-3 text-amber-700" />
-                  {currentPoint.name}
-                </span>
-              )}
-            </div>
-          )}
         </div>
-      </div>
+      )}
     </header>
   );
 };

@@ -80,10 +80,25 @@ export const DriverWorkspaceView: React.FC<DriverWorkspaceViewProps> = ({ curren
         driverProfile ? `${driverProfile.name} (${driverProfile.vehicleModel} ${driverProfile.licensePlate})` : currentUser.name,
         currentUser.driverId
       );
-      showToast(newStatus === 'dispatched' ? 'Рейс начат: груз в пути к кофейне' : 'Груз доставлен в кофейню');
+      showToast('Рейс начат: груз в пути к кофейне');
       loadData();
     } catch (err: any) {
       alert(err.message || 'Ошибка обновления статуса');
+    } finally {
+      setIsUpdating(null);
+    }
+  };
+
+  // Подтверждение доставки реально фиксируется на сервере: только после него старший смены может принять поставку
+  const handleConfirmDelivery = async (wb: Waybill) => {
+    if (!window.confirm(`Подтвердить, что груз доставлен в «${wb.pointName}»?\nПосле подтверждения старший смены сможет принять поставку.`)) return;
+    setIsUpdating(wb.id);
+    try {
+      await ApiService.confirmDelivery(wb.id);
+      showToast('Доставка подтверждена. Старший смены может принимать поставку.');
+      loadData();
+    } catch (err: any) {
+      alert(err.message || 'Не удалось подтвердить доставку');
     } finally {
       setIsUpdating(null);
     }
@@ -143,9 +158,9 @@ export const DriverWorkspaceView: React.FC<DriverWorkspaceViewProps> = ({ curren
             </div>
             <h2 className="text-xl font-extrabold text-stone-900 mt-1">{currentUser.name}</h2>
             <p className="text-xs text-stone-500 mt-0.5 flex items-center gap-3 flex-wrap">
-              <span>Автомобиль: <strong className="text-stone-800">{currentUser.vehicleModel || driverProfile?.vehicleModel || 'ГАЗель NEXT'}</strong></span>
-              <span>Госномер: <strong className="font-mono text-stone-800">{currentUser.licensePlate || driverProfile?.licensePlate || 'В782ОК 777'}</strong></span>
-              <span>Телефон: <strong className="text-stone-800">{currentUser.phone || driverProfile?.phone || '+7 (915) 333-22-11'}</strong></span>
+              <span>Автомобиль: <strong className="text-stone-800">{currentUser.vehicleModel || driverProfile?.vehicleModel || '—'}</strong></span>
+              <span>Госномер: <strong className="font-mono text-stone-800">{currentUser.licensePlate || driverProfile?.licensePlate || '—'}</strong></span>
+              <span>Телефон: <strong className="text-stone-800">{currentUser.phone || driverProfile?.phone || '—'}</strong></span>
             </p>
           </div>
         </div>
@@ -284,7 +299,7 @@ export const DriverWorkspaceView: React.FC<DriverWorkspaceViewProps> = ({ curren
                     >
                       {wb.status === 'formed' && 'Сформирована (ждет сборки)'}
                       {wb.status === 'packing' && 'Собирается в цехе'}
-                      {wb.status === 'dispatched' && '🚚 В пути к кофейне'}
+                      {wb.status === 'dispatched' && (wb.deliveredAt ? '📍 Доставлено, ждёт приёмки' : '🚚 В пути к кофейне')}
                       {wb.status === 'received' && '✅ Принята кофейней'}
                       {wb.status === 'received_with_discrepancies' && '⚠️ Принята с расхождениями'}
                     </span>
@@ -299,12 +314,16 @@ export const DriverWorkspaceView: React.FC<DriverWorkspaceViewProps> = ({ curren
                       <Factory className="w-3.5 h-3.5 text-amber-800" />
                       Пункт отправления (Цех):
                     </span>
-                    <h5 className="font-bold text-stone-900 text-sm">Центральный кондитерский цех</h5>
-                    <p className="text-stone-600 mt-0.5">г. Москва, ул. Грайвороновская, д. 20</p>
-                    <p className="text-stone-500 mt-1 flex items-center gap-1 font-mono">
-                      <Phone className="w-3 h-3" />
-                      +7 (495) 321-45-67 (Павел Архипов)
-                    </p>
+                    <h5 className="font-bold text-stone-900 text-sm">{wb.workshopName || 'Цех не указан'}</h5>
+                    <p className="text-stone-600 mt-0.5">{wb.workshopAddress || 'Адрес цеха не указан в справочнике'}</p>
+                    {(wb.workshopPhone || wb.workshopChiefName) && (
+                      <p className="text-stone-500 mt-1 flex items-center gap-1 font-mono">
+                        <Phone className="w-3 h-3 shrink-0" />
+                        <span className="min-w-0 break-words">
+                          {[wb.workshopPhone, wb.workshopChiefName && `(${wb.workshopChiefName})`].filter(Boolean).join(' ')}
+                        </span>
+                      </p>
+                    )}
                   </div>
 
                   {/* To: Coffee Shop */}
@@ -316,12 +335,14 @@ export const DriverWorkspaceView: React.FC<DriverWorkspaceViewProps> = ({ curren
                     <h5 className="font-bold text-stone-900 text-sm">{wb.pointName}</h5>
                     <p className="text-stone-700 mt-0.5 flex items-center gap-1">
                       <MapPin className="w-3.5 h-3.5 text-amber-700 shrink-0" />
-                      <span>{wb.pointName.includes('Арбат') ? 'ул. Старый Арбат, д. 28' : wb.pointName.includes('Тверская') ? 'ул. Тверская, д. 12' : 'Пресненская наб., 8'}</span>
+                      <span>{wb.pointAddress || 'Адрес кофейни не указан в справочнике'}</span>
                     </p>
-                    <p className="text-stone-500 mt-1 flex items-center gap-1">
-                      <Phone className="w-3 h-3" />
-                      Старший смены: {wb.receivedBy || 'Дежурный бариста'}
-                    </p>
+                    {wb.receivedBy && (
+                      <p className="text-stone-500 mt-1 flex items-center gap-1">
+                        <Phone className="w-3 h-3 shrink-0" />
+                        Принял: {wb.receivedBy}
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -349,30 +370,38 @@ export const DriverWorkspaceView: React.FC<DriverWorkspaceViewProps> = ({ curren
                 <div className="pt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="text-xs text-stone-400">
                     {wb.dispatchedAt && `Отгружен из цеха: ${new Date(wb.dispatchedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+                    {wb.deliveredAt && ` • Доставка подтверждена: ${new Date(wb.deliveredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
                     {wb.receivedAt && ` • Принят в кофейне: ${new Date(wb.receivedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
                     {wb.status === 'packing' && (
                       <button
                         disabled={isUpdating === wb.id}
                         onClick={() => handleUpdateStatus(wb.id, 'dispatched')}
-                        className="px-4 py-2 bg-amber-800 hover:bg-amber-900 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
+                        className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-amber-800 px-4 py-2.5 text-center text-xs font-bold text-white shadow-sm transition-all hover:bg-amber-900 disabled:opacity-60 sm:w-auto cursor-pointer"
                       >
-                        <Truck className="w-4 h-4" />
+                        <Truck className="h-4 w-4 shrink-0" />
                         <span>Принял груз в цехе → Выехал</span>
                       </button>
                     )}
 
-                    {wb.status === 'dispatched' && (
+                    {wb.status === 'dispatched' && !wb.deliveredAt && (
                       <button
                         disabled={isUpdating === wb.id}
-                        onClick={() => showToast('Вы прибыли в кофейню. Старший смены сверяет и подтверждает приёмку.')}
-                        className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
+                        onClick={() => handleConfirmDelivery(wb)}
+                        className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-emerald-700 px-4 py-2.5 text-center text-xs font-bold text-white shadow-sm transition-all hover:bg-emerald-800 disabled:opacity-60 sm:w-auto cursor-pointer"
                       >
-                        <CheckCircle2 className="w-4 h-4" />
-                        <span>Прибыл в кофейню (Передать на приёмку)</span>
+                        <CheckCircle2 className="h-4 w-4 shrink-0" />
+                        <span>Подтвердить доставку</span>
                       </button>
+                    )}
+
+                    {wb.status === 'dispatched' && wb.deliveredAt && (
+                      <span className="flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800">
+                        <Check className="h-4 w-4 shrink-0" />
+                        <span>Доставка подтверждена. Ожидается приёмка старшим смены</span>
+                      </span>
                     )}
 
                     {isCompleted && (

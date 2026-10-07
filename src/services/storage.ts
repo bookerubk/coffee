@@ -12,38 +12,11 @@ import {
   TenantAccount,
   UserSession,
 } from '../types';
-import {
-  INITIAL_POINTS,
-  INITIAL_PRODUCTS,
-  INITIAL_EMPLOYEES,
-  INITIAL_SLOTS,
-  INITIAL_ORDERS,
-  INITIAL_WAYBILLS,
-  INITIAL_LEGAL_ENTITIES,
-  INITIAL_WORKSHOPS,
-  INITIAL_DRIVERS,
-} from './mockData';
-
-export const INITIAL_TENANT_ACCOUNTS: TenantAccount[] = [
-  {
-    id: 'acc-aroma',
-    name: 'Сеть кофеен «Арома Холдинг»',
-    dbSchema: 'db_aroma_prod',
-    inn: '7701984210',
-    adminEmail: 'admin@aroma-coffee.ru',
-    adminName: 'Сергей Воронов',
-    description: 'Основная сеть кофеен и пекарен Москвы (Тверская, Арбат, Сити, Патриаршие)',
-  },
-  {
-    id: 'acc-nordic',
-    name: 'Сеть кофеен «Север Кофе» (Изолированная БД)',
-    dbSchema: 'db_nordic_prod',
-    inn: '7802345678',
-    adminEmail: 'admin@nordic-coffee.ru',
-    adminName: 'Алексей Смирнов',
-    description: 'Отдельный независимый аккаунт со своей базой данных: цех Север, 2 кофейни, свой парк доставки',
-  },
-];
+// Демо-данные (mockData) на клиенте больше не используются: источник истины — сервер (БД).
+// Раньше пустые справочники, заказы и накладные подменялись демо-набором, и в пустой базе
+// на экране появлялись записи, которых в БД нет. Единственное исключение — настройки смен: это
+// конфигурация по умолчанию, и сервер отдаёт те же значения.
+import { INITIAL_SLOTS } from './mockData';
 
 const STORAGE_KEYS = {
   LEGACY_AUTH_TOKEN: 'coffee_app_auth_token_v1', // больше не используется, только для очистки
@@ -87,6 +60,18 @@ function setStoredItem<T>(key: string, value: T, notify = true): void {
   } catch (e) {
     console.error(`Error writing ${key} to storage`, e);
   }
+}
+
+/** Пишет в кэш и оповещает подписчиков, только если данные действительно изменились (фоновое обновление не должно дёргать экран). */
+function replaceStoredIfChanged<T>(key: string, value: T): void {
+  if (typeof window === 'undefined' || typeof localStorage === 'undefined') return;
+  try {
+    const next = JSON.stringify(value);
+    if (localStorage.getItem(key) === next) return;
+  } catch {
+    /* продолжаем обычной записью */
+  }
+  setStoredItem(key, value);
 }
 
 // Storage Manager
@@ -170,7 +155,7 @@ export const StorageManager = {
     setStoredItem(STORAGE_KEYS.ACTIVE_ACCOUNT_ID, id);
   },
   getTenantAccounts(): TenantAccount[] {
-    return getStoredItem<TenantAccount[]>(STORAGE_KEYS.TENANT_ACCOUNTS, INITIAL_TENANT_ACCOUNTS);
+    return getStoredItem<TenantAccount[]>(STORAGE_KEYS.TENANT_ACCOUNTS, []);
   },
   saveTenantAccount(account: TenantAccount): void {
     const list = this.getTenantAccounts();
@@ -185,7 +170,7 @@ export const StorageManager = {
 
   // Legal Entities
   getLegalEntities(): LegalEntity[] {
-    return getStoredItem<LegalEntity[]>(STORAGE_KEYS.LEGAL_ENTITIES, INITIAL_LEGAL_ENTITIES);
+    return getStoredItem<LegalEntity[]>(STORAGE_KEYS.LEGAL_ENTITIES, []);
   },
   saveLegalEntity(entity: LegalEntity): void {
     const list = this.getLegalEntities();
@@ -200,7 +185,7 @@ export const StorageManager = {
 
   // Workshops
   getWorkshops(): Workshop[] {
-    return getStoredItem<Workshop[]>(STORAGE_KEYS.WORKSHOPS, INITIAL_WORKSHOPS);
+    return getStoredItem<Workshop[]>(STORAGE_KEYS.WORKSHOPS, []);
   },
   saveWorkshop(workshop: Workshop): void {
     const list = this.getWorkshops();
@@ -215,7 +200,7 @@ export const StorageManager = {
 
   // Drivers
   getDrivers(): Driver[] {
-    return getStoredItem<Driver[]>(STORAGE_KEYS.DRIVERS, INITIAL_DRIVERS);
+    return getStoredItem<Driver[]>(STORAGE_KEYS.DRIVERS, []);
   },
   saveDriver(driver: Driver): void {
     const list = this.getDrivers();
@@ -230,7 +215,7 @@ export const StorageManager = {
 
   // Points
   getPoints(): CoffeePoint[] {
-    return getStoredItem<CoffeePoint[]>(STORAGE_KEYS.POINTS, INITIAL_POINTS);
+    return getStoredItem<CoffeePoint[]>(STORAGE_KEYS.POINTS, []);
   },
   savePoint(point: CoffeePoint): void {
     const points = this.getPoints();
@@ -245,7 +230,7 @@ export const StorageManager = {
 
   // Products
   getProducts(): ProductItem[] {
-    return getStoredItem<ProductItem[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    return getStoredItem<ProductItem[]>(STORAGE_KEYS.PRODUCTS, []);
   },
   saveProduct(product: ProductItem): void {
     const products = this.getProducts();
@@ -260,7 +245,7 @@ export const StorageManager = {
 
   // Employees
   getEmployees(): Employee[] {
-    return getStoredItem<Employee[]>(STORAGE_KEYS.EMPLOYEES, INITIAL_EMPLOYEES);
+    return getStoredItem<Employee[]>(STORAGE_KEYS.EMPLOYEES, []);
   },
   saveEmployee(employee: Employee): void {
     const employees = this.getEmployees();
@@ -299,12 +284,12 @@ export const StorageManager = {
   // активного аккаунта (демо-данные без accountId относятся к 'acc-aroma').
   getOrders(): ShiftOrder[] {
     const accountId = this.getActiveAccountId();
-    return getStoredItem<ShiftOrder[]>(STORAGE_KEYS.ORDERS, INITIAL_ORDERS).filter(
+    return getStoredItem<ShiftOrder[]>(STORAGE_KEYS.ORDERS, []).filter(
       (o) => (o.accountId || 'acc-aroma') === accountId
     );
   },
   saveOrder(order: ShiftOrder): void {
-    const orders = getStoredItem<ShiftOrder[]>(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
+    const orders = getStoredItem<ShiftOrder[]>(STORAGE_KEYS.ORDERS, []);
     const idx = orders.findIndex((o) => o.id === order.id);
     if (idx >= 0) {
       orders[idx] = order;
@@ -314,15 +299,30 @@ export const StorageManager = {
     setStoredItem(STORAGE_KEYS.ORDERS, orders);
   },
 
+  /**
+   * Заменяет кэш заказов активного аккаунта списком с сервера. Раньше записи только добавлялись,
+   * и удалённые на сервере (или демо-записи) оставались на экране навсегда.
+   */
+  replaceOrders(orders: ShiftOrder[]): void {
+    const accountId = this.getActiveAccountId();
+    const others = getStoredItem<ShiftOrder[]>(STORAGE_KEYS.ORDERS, []).filter((o) => (o.accountId || 'acc-aroma') !== accountId);
+    replaceStoredIfChanged(STORAGE_KEYS.ORDERS, [...others, ...orders]);
+  },
+
   // Waybills
+  replaceWaybills(waybills: Waybill[]): void {
+    const accountId = this.getActiveAccountId();
+    const others = getStoredItem<Waybill[]>(STORAGE_KEYS.WAYBILLS, []).filter((w) => (w.accountId || 'acc-aroma') !== accountId);
+    replaceStoredIfChanged(STORAGE_KEYS.WAYBILLS, [...others, ...waybills]);
+  },
   getWaybills(): Waybill[] {
     const accountId = this.getActiveAccountId();
-    return getStoredItem<Waybill[]>(STORAGE_KEYS.WAYBILLS, INITIAL_WAYBILLS).filter(
+    return getStoredItem<Waybill[]>(STORAGE_KEYS.WAYBILLS, []).filter(
       (w) => (w.accountId || 'acc-aroma') === accountId
     );
   },
   saveWaybill(waybill: Waybill): void {
-    const waybills = getStoredItem<Waybill[]>(STORAGE_KEYS.WAYBILLS, INITIAL_WAYBILLS);
+    const waybills = getStoredItem<Waybill[]>(STORAGE_KEYS.WAYBILLS, []);
     const idx = waybills.findIndex((w) => w.id === waybill.id);
     if (idx >= 0) {
       waybills[idx] = waybill;
@@ -428,18 +428,9 @@ export const StorageManager = {
     setStoredItem(STORAGE_KEYS.FORCE_DEADLINE_PASSED, val);
   },
 
-  // Reset to default seed
+  // Полная очистка локального кэша (демо-данными кэш больше не наполняется)
   resetAll(): void {
     localStorage.clear();
-    setStoredItem(STORAGE_KEYS.LEGAL_ENTITIES, INITIAL_LEGAL_ENTITIES);
-    setStoredItem(STORAGE_KEYS.WORKSHOPS, INITIAL_WORKSHOPS);
-    setStoredItem(STORAGE_KEYS.DRIVERS, INITIAL_DRIVERS);
-    setStoredItem(STORAGE_KEYS.POINTS, INITIAL_POINTS);
-    setStoredItem(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
-    setStoredItem(STORAGE_KEYS.EMPLOYEES, INITIAL_EMPLOYEES);
-    setStoredItem(STORAGE_KEYS.SLOTS, INITIAL_SLOTS);
-    setStoredItem(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
-    setStoredItem(STORAGE_KEYS.WAYBILLS, INITIAL_WAYBILLS);
     window.location.reload();
   },
 

@@ -5,6 +5,8 @@ import { ApiService } from './services/api';
 import { Header } from './components/Header';
 import { LoginPage } from './components/auth/LoginPage';
 import { ChangePasswordModal } from './components/auth/ChangePasswordModal';
+import { defaultViewFor } from './navigation';
+import { BlockingSaveOverlay } from './components/BlockingSaveOverlay';
 import { OrderCreationView } from './components/supervisor/OrderCreationView';
 import { SupervisorDeliveriesView } from './components/supervisor/SupervisorDeliveriesView';
 import { AggregatedOrdersView } from './components/operator/AggregatedOrdersView';
@@ -13,6 +15,21 @@ import { DriverWorkspaceView } from './components/driver/DriverWorkspaceView';
 import { DiscrepanciesView } from './components/admin/DiscrepanciesView';
 import { DirectoriesView } from './components/admin/DirectoriesView';
 import { LegalEntitiesAccountView } from './components/admin/LegalEntitiesAccountView';
+
+/** Заглушка «кофейня не выбрана»: пока в БД нет кофеен, вместо неё не подставляется демо-точка. */
+const NO_POINT: CoffeePoint = {
+  id: '',
+  name: '',
+  address: '',
+  assignedEmployeeIds: [],
+  source: 'manual',
+  external_id: '',
+  archived: false,
+};
+
+/** Фоновое обновление данных: заказы и накладные меняют разные люди (водитель, цех, кофейня). */
+const BACKGROUND_SYNC_MS = 60_000;
+const MIN_SYNC_GAP_MS = 10_000;
 
 export default function App() {
   // Current user session & authentication
@@ -32,14 +49,7 @@ export default function App() {
     return user ? user.role : 'shift_supervisor';
   });
 
-  const [activeSubView, setActiveSubView] = useState<string>(() => {
-    const user = StorageManager.getCurrentUser();
-    if (!user) return 'order';
-    if (user.role === 'admin') return 'legal_entities';
-    if (user.role === 'production_operator') return 'summary';
-    if (user.role === 'driver') return 'deliveries';
-    return 'order';
-  });
+  const [activeSubView, setActiveSubView] = useState<string>(() => defaultViewFor(StorageManager.getCurrentUser()?.role ?? 'shift_supervisor'));
 
   const [points, setPoints] = useState<CoffeePoint[]>(() => StorageManager.getPoints());
   const [currentPoint, setCurrentPoint] = useState<CoffeePoint>(() => {
@@ -49,17 +59,7 @@ export default function App() {
       const match = list.find((p) => p.id === user.pointId);
       if (match) return match;
     }
-    return (
-      list[0] || {
-        id: 'point-1',
-        name: 'Кофейня №1 (Центральная)',
-        address: 'ул. Тверская, 12',
-        assignedEmployeeIds: [],
-        source: 'manual',
-        external_id: 'EXT-LOC-001',
-        archived: false,
-      }
-    );
+    return list[0] ?? NO_POINT;
   });
 
   const [currentSlotId, setCurrentSlotId] = useState<SlotId>('morning');
@@ -124,21 +124,22 @@ export default function App() {
     setHasNewAggregatedOrder(pending);
   };
 
+  const lastSyncRef = useRef(0);
+
   const loadAccountData = async () => {
+    lastSyncRef.current = Date.now();
     try {
       const data = await ApiService.getHandbooks();
-      if (data.points && data.points.length > 0) {
-        setPoints(data.points);
-        // Sync current point if needed
-        const user = StorageManager.getCurrentUser();
-        if (user && user.pointId) {
-          const match = data.points.find((p: CoffeePoint) => p.id === user.pointId);
-          if (match) setCurrentPoint(match);
-        } else if (data.points[0]) {
-          setCurrentPoint((prev) => data.points.find((p: CoffeePoint) => p.id === prev.id) || data.points[0]);
-        }
-      }
+      // Сервер — источник истины: пустой список кофеен тоже применяется (раньше оставались старые/демо-данные)
+      const list: CoffeePoint[] = Array.isArray(data.points) ? data.points : [];
+      setPoints(list);
+      const user = StorageManager.getCurrentUser();
+      setCurrentPoint((prev) => {
+        if (user && user.pointId) return list.find((p) => p.id === user.pointId) ?? NO_POINT;
+        return list.find((p) => p.id === prev.id) ?? list[0] ?? NO_POINT;
+      });
       await Promise.all([ApiService.getOrders(), ApiService.getWaybills()]);
+      lastSyncRef.current = Date.now();
       checkPendingAggregation();
     } catch (e) {
       console.warn('Backend sync failed, using storage:', e);
@@ -158,6 +159,34 @@ export default function App() {
     return () => window.removeEventListener('coffee-storage-change', handleStorage);
   }, [currentUser?.id]);
 
+  // Фоновое обновление: пока приложение открыто, подтягиваем изменения других сотрудников
+  // (водитель подтвердил доставку, цех отгрузил, кофейня оформила заказ) — без перезагрузки страницы.
+  useEffect(() => {
+    if (!currentUser) return;
+    const syncIfVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (Date.now() - lastSyncRef.current < MIN_SYNC_GAP_MS) return;
+      void loadAccountData();
+    };
+    const timer = setInterval(syncIfVisible, BACKGROUND_SYNC_MS);
+    document.addEventListener('visibilitychange', syncIfVisible);
+    window.addEventListener('focus', syncIfVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', syncIfVisible);
+      window.removeEventListener('focus', syncIfVisible);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.id]);
+
+  // При переходе между разделами данные тоже обновляются
+  useEffect(() => {
+    if (!currentUser) return;
+    if (Date.now() - lastSyncRef.current < MIN_SYNC_GAP_MS) return;
+    void loadAccountData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSubView, currentRole]);
+
   // Handle successful login
   const handleLogin = (session: UserSession) => {
     currentUserRef.current = session;
@@ -167,21 +196,12 @@ export default function App() {
     StorageManager.setCurrentUser(session);
     StorageManager.setActiveAccountId(session.accountId);
 
-    if (session.role === 'admin') {
-      setActiveSubView('legal_entities');
-    } else if (session.role === 'production_operator') {
-      setActiveSubView('summary');
-    } else if (session.role === 'driver') {
-      setActiveSubView('deliveries');
-    } else {
-      setActiveSubView('order');
-    }
+    setActiveSubView(defaultViewFor(session.role));
 
     // Set point if supervisor
     if (session.pointId) {
       const list = StorageManager.getPoints();
-      const match = list.find((p) => p.id === session.pointId);
-      if (match) setCurrentPoint(match);
+      setCurrentPoint(list.find((p) => p.id === session.pointId) ?? NO_POINT);
     }
   };
 
@@ -231,6 +251,8 @@ export default function App() {
 
       {showPasswordModal && <ChangePasswordModal onClose={() => setShowPasswordModal(false)} />}
 
+      <BlockingSaveOverlay />
+
       {/* Main Header with Role & Point switchers */}
       <Header
         currentRole={currentRole}
@@ -250,7 +272,19 @@ export default function App() {
       {/* Main Workspace Body */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6 pb-28 sm:pb-20">
         {/* SHIFT SUPERVISOR / BARISTA WORKSPACE (Restricted to assigned cafe) */}
-        {currentRole === 'shift_supervisor' && (
+        {currentRole === 'shift_supervisor' && !currentPoint.id && (
+          <div className="mx-auto max-w-xl rounded-2xl border border-dashed border-stone-300 bg-white p-8 text-center">
+            <h2 className="text-base font-bold text-stone-900">
+              {currentUser.role === 'admin' ? 'В справочнике нет ни одной кофейни' : 'За вами не закреплена кофейня'}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-stone-500">
+              {currentUser.role === 'admin'
+                ? 'Добавьте кофейню в разделе «Справочники» — после этого здесь можно будет оформлять заявки.'
+                : 'Обратитесь к администратору: он закрепит за вами кофейню в разделе «Справочники → Сотрудники».'}
+            </p>
+          </div>
+        )}
+        {currentRole === 'shift_supervisor' && !!currentPoint.id && (
           <>
             {activeSubView === 'order' && (
               <OrderCreationView
