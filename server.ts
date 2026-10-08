@@ -32,6 +32,7 @@ import {
   getOrdersQuery,
   findOrderByKeyQuery,
   upsertOrderQuery,
+  deleteOrderQuery,
   getWaybillsQuery,
   upsertWaybillQuery,
   getLegalEntitiesQuery,
@@ -515,6 +516,15 @@ app.post('/api/orders', requireRole('admin', 'shift_supervisor'), async (req, re
       }
     }
 
+    // Черновик один на кофейню, слот и дату: повторное сохранение (даже с потерянным ключом) обновляет его,
+    // а не плодит новые черновики, которых никто не увидит.
+    if (!existing && isDraft) {
+      const sameSlotDraft = (await getOrdersQuery(accountId)).find(
+        (o: any) => o.status === 'draft' && o.pointId === payload.pointId && o.slotId === payload.slotId && o.date === payload.date,
+      );
+      if (sameSlotDraft) existing = sameSlotDraft;
+    }
+
     // ID заказа всегда генерирует сервер: id — глобальный первичный ключ
     const orderId = existing?.id || `ord-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     const nowIso = new Date().toISOString();
@@ -522,7 +532,7 @@ app.post('/api/orders', requireRole('admin', 'shift_supervisor'), async (req, re
     const order = {
       id: orderId,
       accountId,
-      idempotencyKey: payload.idempotencyKey,
+      idempotencyKey: existing?.idempotencyKey || payload.idempotencyKey,
       pointId: payload.pointId,
       pointName: point?.name ?? String(payload.pointName ?? '').slice(0, 200),
       slotId: payload.slotId,
@@ -540,6 +550,24 @@ app.post('/api/orders', requireRole('admin', 'shift_supervisor'), async (req, re
     res.json({ success: true, order });
   } catch (error: any) {
     sendError(res, error, 'Не удалось отправить заказ.');
+  }
+});
+
+// Удаление черновика. Отправленную заявку удалить нельзя: по ней уже работает цех.
+app.delete('/api/orders/:id', requireRole('admin', 'shift_supervisor'), async (req, res) => {
+  try {
+    const user = req.user!;
+    const [orders, ctx] = await Promise.all([getOrdersQuery(user.accountId), loadAccessContext(user.accountId)]);
+    const order = orders.find((o: any) => o.id === req.params.id);
+    // Чужую и несуществующую заявку не различаем
+    if (!order || !canAccessOrder(user, order, ctx)) throw new HttpError(404, 'Заявка не найдена.');
+    if (order.status !== 'draft') {
+      throw new HttpError(409, 'Удалить можно только черновик. Отправленная заявка уже передана в цех.');
+    }
+    await deleteOrderQuery(order.id);
+    res.json({ success: true });
+  } catch (error: any) {
+    sendError(res, error, 'Не удалось удалить черновик.');
   }
 });
 
@@ -694,6 +722,9 @@ app.put('/api/waybills/:id/dispatch', requireRole('admin', 'production_operator'
     const { waybill, ctx } = await findWaybillFor(user, req.params.id);
     if (FINISHED_WAYBILL.has(waybill.status)) {
       throw new HttpError(409, 'Накладная уже принята — изменить отгрузку нельзя.');
+    }
+    if (waybill.deliveredAt) {
+      throw new HttpError(409, 'Водитель уже подтвердил доставку — изменить отгрузку и водителя нельзя.');
     }
     if (waybill.status === 'dispatched' && newStatus !== 'dispatched') {
       throw new HttpError(409, 'Накладная уже отгружена — вернуть её в сборку нельзя.');

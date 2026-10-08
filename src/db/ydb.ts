@@ -147,6 +147,10 @@ export async function executeYql<T = Record<string, unknown>>(text: string, para
   }
 }
 
+export async function deleteYdbRow(table: string, id: string) {
+  await executeYql(`DELETE FROM \`${table}\` WHERE id = $_id;`, { _id: id });
+}
+
 export async function ensureYdbTable(table: string, columns: string[]) {
   await executeYql(`CREATE TABLE IF NOT EXISTS \`${table}\` (${columns.join(', ')}, PRIMARY KEY (id));`);
 }

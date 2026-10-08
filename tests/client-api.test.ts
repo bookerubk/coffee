@@ -114,3 +114,29 @@ test('получение заказов и накладных заменяет �
   assert.deepEqual(StorageManager.getWaybills(), []);
   assert.deepEqual(blocking(), []); // чтение данных экран не блокирует
 });
+
+test('удаление черновика: DELETE на сервер, экран блокируется, запись исчезает из кэша', async () => {
+  StorageManager.setCurrentUser({ id: 's', name: 'Старший', role: 'shift_supervisor', accountId: 'acc-a', accountName: 'A', dbSchema: '' } as any);
+  StorageManager.saveOrder({ id: 'ord-1-dr4ft', accountId: 'acc-a', pointId: 'p', pointName: 'P', slotId: 'morning', date: '2026-10-05', status: 'draft', items: [], createdBy: 'x', createdAt: '', updatedAt: '' } as any);
+  stubFetch(() => json(200, { success: true }));
+  await ApiService.deleteDraftOrder('ord-1-dr4ft');
+  assert.equal(calls[0].url, '/api/orders/ord-1-dr4ft');
+  assert.equal(calls[0].init.method, 'DELETE');
+  assert.deepEqual(StorageManager.getOrders(), []);
+  assert.deepEqual(blocking(), [true, false]);
+});
+
+test('удаление черновика: «уже нет на сервере» (404) не ошибка, отказ сервера (409) — ошибка и запись остаётся', async () => {
+  StorageManager.setCurrentUser({ id: 's', name: 'Старший', role: 'shift_supervisor', accountId: 'acc-a', accountName: 'A', dbSchema: '' } as any);
+  const saved = { id: 'ord-2-x', accountId: 'acc-a', pointId: 'p', pointName: 'P', slotId: 'morning', date: '2026-10-05', status: 'draft', items: [], createdBy: 'x', createdAt: '', updatedAt: '' } as any;
+  StorageManager.saveOrder(saved);
+
+  stubFetch(() => json(409, { error: 'Удалить можно только черновик. Отправленная заявка уже передана в цех.' }));
+  await assert.rejects(() => ApiService.deleteDraftOrder('ord-2-x'), /Удалить можно только черновик/);
+  assert.equal(StorageManager.getOrders().length, 1);
+  assert.equal(blocking().at(-1), false);
+
+  stubFetch(() => json(404, { error: 'Заявка не найдена.' }));
+  await ApiService.deleteDraftOrder('ord-2-x');
+  assert.deepEqual(StorageManager.getOrders(), []);
+});

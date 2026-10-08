@@ -44,6 +44,14 @@ function exec(text: string, params: Record<string, any>): Row[][] {
     return [];
   }
 
+  m = text.match(/^DELETE FROM `(\w+)` WHERE id = \$_id;$/);
+  if (m) {
+    const [, table] = m;
+    if (!schemas.has(table)) throw new Error(`Table not found: ${table}`);
+    tables.get(table)!.delete(String(toJs(params['_id'])));
+    return [];
+  }
+
   m = text.match(/^ALTER TABLE `(\w+)` ADD COLUMN (\w+) (\w+);$/);
   if (m) {
     const [, table, column, type] = m;

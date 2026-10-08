@@ -656,3 +656,64 @@ test('флаг awaitingDeliveryConfirmation считает сервер: вид�
   const solo = (await call('sup', 'GET', '/api/waybills')).json.find((w: any) => w.id === gen.json[0].id);
   assert.equal(solo.awaitingDeliveryConfirmation, false);
 });
+
+// ======================= Черновики и состав заявок =======================
+
+test('черновик один на кофейню/слот/дату: повторное сохранение с другим ключом обновляет его, а не создаёт второй', async () => {
+  const first = await call('sup', 'POST', '/api/orders', order({ idempotencyKey: 'key-A', isDraft: true }));
+  const second = await call('sup', 'POST', '/api/orders', order({ idempotencyKey: 'key-B', isDraft: true, items: [{ ...item, quantity: 7 }] }));
+  assert.equal(second.json.order.id, first.json.order.id);
+  assert.equal(second.json.order.items[0].quantity, 7);
+  assert.equal(second.json.order.idempotencyKey, 'key-A'); // ключ черновика остаётся прежним — клиент берёт его из ответа
+
+  const list = (await call('sup', 'GET', '/api/orders')).json;
+  assert.equal(list.length, 1);
+  assert.equal(list[0].status, 'draft'); // черновик виден в списке заявок кофейни
+
+  // другой слот — отдельный черновик
+  const evening = await call('sup', 'POST', '/api/orders', order({ slotId: 'evening', isDraft: true }));
+  assert.notEqual(evening.json.order.id, first.json.order.id);
+
+  // отправка по ключу черновика превращает его в заявку (а не создаёт дубль)
+  const sent = await call('sup', 'POST', '/api/orders', order({ idempotencyKey: 'key-A', items: [{ ...item, quantity: 9 }] }));
+  assert.equal(sent.json.order.id, first.json.order.id);
+  assert.equal(sent.json.order.status, 'submitted');
+  assert.equal((await call('sup', 'GET', '/api/orders')).json.filter((o: any) => o.slotId === 'morning').length, 1);
+});
+
+test('удаление черновика: только свой, только черновик', async () => {
+  const draft = await call('sup', 'POST', '/api/orders', order({ isDraft: true }));
+  const sent = await call('sup', 'POST', '/api/orders', order({ slotId: 'evening' }));
+
+  assert.equal((await call('sup2', 'DELETE', `/api/orders/${draft.json.order.id}`)).status, 404); // чужая кофейня
+  assert.equal((await call('op', 'DELETE', `/api/orders/${draft.json.order.id}`)).status, 403);
+  assert.equal((await call('driver', 'DELETE', `/api/orders/${draft.json.order.id}`)).status, 403);
+  assert.equal((await call('sup', 'DELETE', '/api/orders/ord-unknown')).status, 404);
+
+  const refuse = await call('sup', 'DELETE', `/api/orders/${sent.json.order.id}`);
+  assert.equal(refuse.status, 409);
+  assert.match(refuse.json.error, /Удалить можно только черновик/);
+
+  assert.equal((await call('sup', 'DELETE', `/api/orders/${draft.json.order.id}`)).status, 200);
+  const left = (await call('sup', 'GET', '/api/orders')).json;
+  assert.deepEqual(left.map((o: any) => o.id), [sent.json.order.id]);
+  assert.equal((await call('sup', 'DELETE', `/api/orders/${draft.json.order.id}`)).status, 404); // повтор
+});
+
+test('цех не может менять отгрузку и водителя после подтверждения доставки', async () => {
+  const wb = await makeWaybill();
+  await dispatchWith(wb.id, { driverId: 'drv-1', driverName: 'Михаил Водитель' });
+
+  // до подтверждения доставки водителя ещё можно заменить (ошибка при отгрузке)
+  assert.equal((await dispatchWith(wb.id, { driverId: 'drv-2', driverName: 'Пётр Водитель' })).status, 200);
+
+  await call('driver2', 'PUT', `/api/waybills/${wb.id}/deliver`, {});
+  const locked = await dispatchWith(wb.id, { driverId: 'drv-1', driverName: 'Михаил Водитель' });
+  assert.equal(locked.status, 409);
+  assert.match(locked.json.error, /Водитель уже подтвердил доставку/);
+
+  await call('sup', 'PUT', `/api/waybills/${wb.id}/receive`, goodReceive);
+  assert.equal((await dispatchWith(wb.id, { driverId: 'drv-1' })).status, 409); // принятую — тем более
+  const stored = (await call('admin', 'GET', '/api/waybills')).json.find((w: any) => w.id === wb.id);
+  assert.equal(stored.driverId, 'drv-2'); // водитель остался прежним
+});

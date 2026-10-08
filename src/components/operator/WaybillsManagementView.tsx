@@ -30,6 +30,12 @@ export const WaybillsManagementView: React.FC<WaybillsManagementViewProps> = ({
   const [waybills, setWaybills] = useState<Waybill[]>([]);
   const [selectedWaybill, setSelectedWaybill] = useState<Waybill | null>(null);
 
+  // Накладная принята в кофейне или водитель уже подтвердил доставку: отгрузка и водитель фиксированы, окно — только просмотр.
+  // (Сервер тоже отклоняет такие изменения — это защита и от обхода интерфейса.)
+  const isReceivedWaybill =
+    selectedWaybill?.status === 'received' || selectedWaybill?.status === 'received_with_discrepancies';
+  const isLocked = isReceivedWaybill || Boolean(selectedWaybill?.deliveredAt);
+
   // Dispatch modal state
   const [dispatchedValues, setDispatchedValues] = useState<Record<string, number>>({});
   const [dispatchReasons, setDispatchReasons] = useState<Record<string, string>>({});
@@ -316,7 +322,7 @@ export const WaybillsManagementView: React.FC<WaybillsManagementViewProps> = ({
                     className="px-4 py-2 bg-amber-700 hover:bg-amber-800 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
                   >
                     <Edit3 className="w-3.5 h-3.5" />
-                    <span>{isFinished ? 'Просмотреть накладную' : 'Собрать / Отгрузить'}</span>
+                    <span>{isFinished || wb.deliveredAt ? 'Просмотреть накладную' : 'Собрать / Отгрузить'}</span>
                   </button>
                 </div>
               </div>
@@ -337,7 +343,7 @@ export const WaybillsManagementView: React.FC<WaybillsManagementViewProps> = ({
                   <span className="text-xs text-stone-500">| {selectedWaybill.pointName}</span>
                 </div>
                 <h3 className="text-base font-bold text-stone-900 mt-0.5">
-                  Комплектация и фиксация отгрузки
+                  {isLocked ? 'Накладная (только просмотр)' : 'Комплектация и фиксация отгрузки'}
                 </h3>
               </div>
               <button
@@ -366,7 +372,9 @@ export const WaybillsManagementView: React.FC<WaybillsManagementViewProps> = ({
                         if (drv) setDriverId(drv.id);
                       }
                     }}
-                    className="w-full sm:w-60 bg-white border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs text-stone-800 font-medium focus:outline-none focus:ring-2 focus:ring-amber-600 truncate"
+                    disabled={isLocked}
+                    aria-disabled={isLocked}
+                    className="w-full sm:w-60 bg-white border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs text-stone-800 font-medium focus:outline-none focus:ring-2 focus:ring-amber-600 truncate disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-500"
                   >
                     {StorageManager.getDrivers()
                       .filter((d) => !d.archived)
@@ -386,9 +394,18 @@ export const WaybillsManagementView: React.FC<WaybillsManagementViewProps> = ({
                     value={driverName}
                     onChange={(e) => setDriverName(e.target.value)}
                     placeholder="ФИО и авто..."
-                    className="w-full sm:w-44 bg-white border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs text-stone-800 font-medium focus:outline-none focus:ring-2 focus:ring-amber-600"
+                    disabled={isLocked}
+                    readOnly={isLocked}
+                    className="w-full sm:w-44 bg-white border border-stone-300 rounded-lg px-2.5 py-1.5 text-xs text-stone-800 font-medium focus:outline-none focus:ring-2 focus:ring-amber-600 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-stone-500"
                   />
                 </div>
+                {isLocked && (
+                  <p className="w-full text-[11px] leading-4 text-stone-500 sm:basis-full">
+                    🔒 {isReceivedWaybill
+                      ? 'Поставка принята в кофейне — водителя и отгрузку изменить нельзя.'
+                      : 'Водитель подтвердил доставку — водителя и отгрузку изменить нельзя.'}
+                  </p>
+                )}
               </div>
 
               {/* Items List */}
@@ -400,9 +417,7 @@ export const WaybillsManagementView: React.FC<WaybillsManagementViewProps> = ({
                       ? dispatchedValues[item.productId]
                       : item.dispatchedQuantity;
                   const hasDiscrepancy = ordered !== dispatched;
-                  const isReadonly =
-                    selectedWaybill.status === 'received' ||
-                    selectedWaybill.status === 'received_with_discrepancies';
+                  const isReadonly = isLocked;
 
                   return (
                     <div
@@ -542,8 +557,7 @@ export const WaybillsManagementView: React.FC<WaybillsManagementViewProps> = ({
                   </button>
                 )}
 
-                {selectedWaybill.status !== 'received' &&
-                  selectedWaybill.status !== 'received_with_discrepancies' && (
+                {!isLocked && (
                     <button
                       type="button"
                       disabled={!isValid || isSubmitting}

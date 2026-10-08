@@ -58,3 +58,11 @@ test('выход очищает кэш данных компании, но не 
   assert.equal(StorageManager.getCurrentUser(), null);
   assert.ok(StorageManager.getDraft('p', 'morning'));
 });
+
+test('removeOrder убирает только указанную заявку', () => {
+  StorageManager.setCurrentUser(user);
+  StorageManager.saveOrder(order('keep'));
+  StorageManager.saveOrder(order('drop'));
+  StorageManager.removeOrder('drop');
+  assert.deepEqual(StorageManager.getOrders().map((o) => o.id), ['keep']);
+});

@@ -53,3 +53,23 @@ test('кнопка формирования накладных не называ
   assert.ok(!/Обновить накладные/.test(view));
   assert.match(view, /Добавить накладные для новых заявок/);
 });
+
+test('экран цеха: принятую или доставленную накладную нельзя править (водитель и отгрузка заблокированы)', () => {
+  const view = fs.readFileSync(path.join(root, 'components', 'operator', 'WaybillsManagementView.tsx'), 'utf8');
+  assert.match(view, /const isLocked = isReceivedWaybill \|\| Boolean\(selectedWaybill\?\.deliveredAt\)/);
+  assert.equal((view.match(/\sdisabled=\{isLocked\}/g) || []).length, 2, 'должны быть заблокированы и выбор водителя, и поле «своё значение»');
+  assert.match(view, /\{!isLocked && \(\s*<button/); // кнопка «отгрузить» скрыта
+  assert.match(view, /const isReadonly = isLocked/);
+  assert.match(view, /Накладная \(только просмотр\)/);
+});
+
+test('форма заявки: список заявок со статусами, подгрузка черновика, постоянное подтверждение', () => {
+  const view = fs.readFileSync(path.join(root, 'components', 'supervisor', 'OrderCreationView.tsx'), 'utf8');
+  assert.match(view, /<MyOrdersPanel/);
+  assert.match(view, /resolveDraftAdoption\(/);
+  assert.match(view, /Черновик сохранён в/);
+  assert.match(view, /отправлена в цех в/);
+  assert.ok(!/Накладная появится в разделе отгрузок/.test(view), 'исчезающее через 4 секунды сообщение заменено постоянным');
+  // форма очищается только после отправки, но не после сохранения черновика
+  assert.match(view, /if \(!isDraft\) \{\s*const reset/);
+});

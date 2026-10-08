@@ -6,11 +6,15 @@ import {
   SlotConfig,
   SaveState,
   CoffeePoint,
+  Waybill,
 } from '../../types';
 import { StorageManager } from '../../services/storage';
 import { ApiService, getSlotDeadlineDetails, getOperationalTimeParts, syncServerTime } from '../../services/api';
 import { SavingOverlayModal } from './SavingOverlayModal';
 import { useVisualViewport } from '../../hooks/useVisualViewport';
+import { MyOrdersPanel } from './MyOrdersPanel';
+import { buildOrderList, shortOrderNumber } from '../../utils/orderProgress';
+import { resolveDraftAdoption } from '../../utils/draftAdoption';
 import {
   Plus,
   Minus,
@@ -48,6 +52,15 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
   const [isCatalogOpen, setIsCatalogOpen] = useState(false);
   const viewport = useVisualViewport(isCatalogOpen);
 
+  // Заявки и накладные кофейни (для списка «Заявки кофейни» и подгрузки черновика)
+  const [orders, setOrders] = useState<ShiftOrder[]>(() => StorageManager.getOrders());
+  const [waybills, setWaybills] = useState<Waybill[]>(() => StorageManager.getWaybills());
+  // Постоянное подтверждение последнего действия — вместо исчезающего через 4 секунды всплывающего окна
+  const [lastAction, setLastAction] = useState<{ kind: 'draft' | 'submitted'; orderId: string; at: string } | null>(null);
+  const [highlightOrderId, setHighlightOrderId] = useState<string | null>(null);
+  const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
+  const adoptedDraftRef = useRef<string>('');
+
   // Пока каталог открыт, страница под ним не прокручивается
   useEffect(() => {
     if (!isCatalogOpen) return;
@@ -74,6 +87,12 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
   // Что именно пользователь пытался сделать (черновик или отправка) — нужно для «Повторить»
   const lastSubmitIsDraftRef = useRef<boolean>(false);
 
+  // Актуальные значения формы для эффектов (в замыкании эффекта они могут оказаться устаревшими)
+  const quantitiesRef = useRef(quantities);
+  quantitiesRef.current = quantities;
+  const hasUnsavedChangesRef = useRef(hasUnsavedChanges);
+  hasUnsavedChangesRef.current = hasUnsavedChanges;
+
   // Slots state synchronized with storage and API
   const [slots, setSlots] = useState<SlotConfig[]>(() => StorageManager.getSlots());
   const [clockTick, setClockTick] = useState<number>(0);
@@ -85,6 +104,8 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
       setSlots(StorageManager.getSlots());
       // Каталог приходит с сервера уже после первой отрисовки — обновляем и его
       setProducts(StorageManager.getProducts().filter((p) => !p.archived));
+      setOrders(StorageManager.getOrders());
+      setWaybills(StorageManager.getWaybills());
     };
     window.addEventListener('coffee-storage-change', handleStorage);
     const interval = setInterval(() => {
@@ -107,6 +128,9 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
 
   const isDeadlinePassed = deadlineDetails.isPassed;
 
+  // Текущая дата — по операционному часовому поясу (так же, как дата заказа при отправке)
+  const todayDate = useMemo(() => getOperationalTimeParts().dateString, [clockTick]);
+
   // Generate UUID helper
   function generateUUID(): string {
     if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -117,6 +141,7 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
 
   // Load products & local backup proposal
   useEffect(() => {
+    adoptedDraftRef.current = '';
     const prods = StorageManager.getProducts().filter((p) => !p.archived);
     setProducts(prods);
 
@@ -131,6 +156,8 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
     // Check normal draft
     const draft = StorageManager.getDraft(currentPoint.id, currentSlotId);
     if (draft && draft.quantities) {
+      quantitiesRef.current = draft.quantities; // эффект подгрузки серверного черновика читает актуальное значение
+      hasUnsavedChangesRef.current = false;
       setQuantities(draft.quantities);
       setLastAutoSavedAt(draft.savedAt ? new Date(draft.savedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null);
     } else {
@@ -139,12 +166,39 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
       prods.forEach((p) => {
         initial[p.id] = 0;
       });
+      quantitiesRef.current = initial;
+      hasUnsavedChangesRef.current = false;
       setQuantities(initial);
     }
 
     // Refresh idempotency key for this fresh order session
     setIdempotencyKey(generateUUID());
   }, [currentPoint.id, currentSlotId]);
+
+  // Черновик, сохранённый на сервере, подгружается в форму при каждом открытии (раньше он нигде не показывался,
+  // а при возвращении на экран форма оказывалась пустой, и повторная отправка создавала дубль).
+  useEffect(() => {
+    const draft = orders.find(
+      (o) => o.status === 'draft' && o.pointId === currentPoint.id && o.slotId === currentSlotId && o.date === todayDate,
+    );
+    if (!draft || products.length === 0) return;
+    const stamp = `${draft.id}:${draft.updatedAt}`;
+    if (adoptedDraftRef.current === stamp) return;
+    adoptedDraftRef.current = stamp;
+
+    const adoption = resolveDraftAdoption({
+      draft,
+      local: StorageManager.getDraft(currentPoint.id, currentSlotId),
+      formUntouched: !hasUnsavedChangesRef.current && Object.values(quantitiesRef.current).every((q) => !q),
+      productIds: products.map((p) => p.id),
+    });
+    // Ключ всегда берём у черновика: отправка по нему превратит его в заявку, а не создаст вторую
+    if (adoption.idempotencyKey) setIdempotencyKey(adoption.idempotencyKey);
+    if (adoption.quantities) {
+      setQuantities(adoption.quantities);
+      setLastAutoSavedAt(new Date(draft.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+    }
+  }, [orders, products, currentPoint.id, currentSlotId, todayDate]);
 
   // Periodic Auto-save every 6 seconds (Section 4.1)
   useEffect(() => {
@@ -304,29 +358,30 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
       clearTimeout(timeoutIdRef.current);
 
       if (response.success) {
+        const saved = response.order;
         setSaveState('SUCCESS');
         setHasUnsavedChanges(false);
+        setLastAction({ kind: isDraft ? 'draft' : 'submitted', orderId: saved.id, at: new Date().toISOString() });
+        setHighlightOrderId(saved.id);
+        setTimeout(() => setHighlightOrderId((cur) => (cur === saved.id ? null : cur)), 8000);
 
-        // Success: green check animation for 1.2s -> then reset or notify
+        if (isDraft) {
+          // Форма остаётся заполненной; локальная копия совпадает с серверной, ключ — как у черновика
+          StorageManager.saveDraft(currentPoint.id, currentSlotId, { quantities, pointId: currentPoint.id, slotId: currentSlotId });
+          if (saved.idempotencyKey) setIdempotencyKey(saved.idempotencyKey);
+        }
+
+        // Success: green check animation for 1.2s -> then reset the form (только после отправки)
         setTimeout(() => {
           setSaveState('IDLE');
           if (!isDraft) {
-            // Reset form quantities and generate fresh idempotency key
             const reset: Record<string, number> = {};
             products.forEach((p) => (reset[p.id] = 0));
             setQuantities(reset);
             setIdempotencyKey(generateUUID());
-            setNotification({
-              message: 'Заказ успешно отправлен на производство! Накладная появится в разделе отгрузок.',
-              type: 'success',
-            });
-          } else {
-            setNotification({
-              message: 'Черновик надёжно сохранён в базе данных.',
-              type: 'success',
-            });
+            // Показываем заявку в списке со статусом, а не оставляем «пустую форму»
+            document.getElementById('my-orders')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
           }
-          setTimeout(() => setNotification(null), 4000);
         }, 1200);
       }
     } catch (err: any) {
@@ -362,6 +417,36 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
       type: 'info',
     });
     setTimeout(() => setNotification(null), 5000);
+  };
+
+  // Список «Заявки кофейни»: черновики и заявки в работе, с этапом каждой
+  const orderEntries = useMemo(
+    () => buildOrderList(orders, waybills, currentPoint.id, todayDate),
+    [orders, waybills, currentPoint.id, todayDate],
+  );
+
+  const handleDeleteDraft = async (order: ShiftOrder) => {
+    if (!window.confirm('Удалить черновик? Это действие нельзя отменить.')) return;
+    setBusyOrderId(order.id);
+    try {
+      await ApiService.deleteDraftOrder(order.id);
+      if (order.slotId === currentSlotId && order.date === todayDate) {
+        // Это был черновик из открытой формы — очищаем и её, чтобы удалённое не «воскресло» при сохранении
+        const cleared: Record<string, number> = {};
+        products.forEach((p) => (cleared[p.id] = 0));
+        setQuantities(cleared);
+        setHasUnsavedChanges(false);
+        setLastAutoSavedAt(null);
+        StorageManager.clearDraft(currentPoint.id, currentSlotId);
+        setIdempotencyKey(generateUUID());
+        setLastAction(null);
+      }
+    } catch (err: any) {
+      setNotification({ message: err?.message || 'Не удалось удалить черновик.', type: 'info' });
+      setTimeout(() => setNotification(null), 4000);
+    } finally {
+      setBusyOrderId(null);
+    }
   };
 
   // Categories list
@@ -567,10 +652,48 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
 
         {lastAutoSavedAt && (
           <p className="border-t border-stone-100 pt-3 text-sm text-stone-500">
-            Черновик автосохранён в {lastAutoSavedAt}
+            Автосохранено на этом устройстве в {lastAutoSavedAt}. На сервер черновик попадает по кнопке «Сохранить черновик».
           </p>
         )}
       </div>
+
+      {/* Подтверждение последнего действия: остаётся на экране, пока его не закроют */}
+      {lastAction && (
+        <div
+          role="status"
+          className={`flex items-start justify-between gap-3 rounded-2xl border p-4 ${
+            lastAction.kind === 'submitted' ? 'border-emerald-300 bg-emerald-50 text-emerald-950' : 'border-sky-300 bg-sky-50 text-sky-950'
+          }`}
+        >
+          <div className="min-w-0 text-sm leading-6">
+            {lastAction.kind === 'submitted' ? (
+              <>
+                <p className="font-bold">
+                  ✅ Заявка № {shortOrderNumber(lastAction.orderId)} отправлена в цех в{' '}
+                  {new Date(lastAction.at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+                </p>
+                <p>
+                  Статус: «Отправлена». Дальше он будет меняться сам: «Принята цехом» → «Собирается» → «В пути» → «Доставлена» → «Принята».
+                  Следите за ним в списке{' '}
+                  <a href="#my-orders" onClick={(e) => { e.preventDefault(); document.getElementById('my-orders')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="font-semibold underline">«Заявки кофейни»</a>.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="font-bold">
+                  💾 Черновик сохранён в {new Date(lastAction.at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+                </p>
+                <p>
+                  В цех он ещё <strong>не отправлен</strong>. Форма осталась заполненной, а черновик лежит в списке{' '}
+                  <a href="#my-orders" onClick={(e) => { e.preventDefault(); document.getElementById('my-orders')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="font-semibold underline">«Заявки кофейни»</a>{' '}
+                  ниже — его можно открыть позже. Когда будете готовы, нажмите «Отправить заказ».
+                </p>
+              </>
+            )}
+          </div>
+          <button type="button" onClick={() => setLastAction(null)} className="shrink-0 rounded-lg p-1.5 text-current opacity-60 hover:opacity-100" aria-label="Закрыть сообщение">✕</button>
+        </div>
+      )}
 
       <section className="space-y-3" aria-labelledby="order-items-heading">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -614,6 +737,16 @@ export const OrderCreationView: React.FC<OrderCreationViewProps> = ({
           </div>
         )}
       </section>
+
+      <MyOrdersPanel
+        entries={orderEntries}
+        today={todayDate}
+        currentSlotId={currentSlotId}
+        highlightOrderId={highlightOrderId}
+        onOpenSlot={onSlotChange}
+        onDeleteDraft={handleDeleteDraft}
+        busyOrderId={busyOrderId}
+      />
 
       {isCatalogOpen && (
         <div

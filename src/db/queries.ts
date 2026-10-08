@@ -1,5 +1,5 @@
 import { db, eq, desc, and } from './index.ts';
-import { fromYdbRow, selectYdbRows, upsertYdbRow } from './ydb.ts';
+import { deleteYdbRow, fromYdbRow, selectYdbRows, upsertYdbRow, YDB_TABLES } from './ydb.ts';
 import {
   coffeePoints,
   products,
@@ -654,6 +654,16 @@ export async function getOrdersQuery(accountId?: string) {
   } catch (error) {
     console.error('Database query failed (getOrdersQuery):', error);
     throw new Error('Database query failed for shift orders', { cause: error });
+  }
+}
+
+/** Удаляет заявку. Вызывающий код обязан убедиться, что это черновик и что у пользователя есть доступ. */
+export async function deleteOrderQuery(id: string) {
+  try {
+    await deleteYdbRow(YDB_TABLES.shiftOrders, id);
+  } catch (error) {
+    console.error('Database query failed (deleteOrderQuery):', error);
+    throw new Error('Failed to delete order', { cause: error });
   }
 }
 

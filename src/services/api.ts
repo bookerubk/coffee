@@ -595,6 +595,21 @@ export const ApiService = {
   },
 
   /**
+   * Удаляет черновик заявки (отправленную заявку сервер удалить не даст).
+   */
+  async deleteDraftOrder(orderId: string): Promise<void> {
+    const res = await apiFetch(`/api/orders/${encodeURIComponent(orderId)}`, {
+      method: 'DELETE',
+      headers: getApiHeaders(),
+    });
+    if (!res.ok && res.status !== 404) {
+      const err = await res.json().catch(() => ({}));
+      throw new ApiError(err.error || 'Не удалось удалить черновик');
+    }
+    StorageManager.removeOrder(orderId); // 404 — черновика уже нет, убираем и из кэша
+  },
+
+  /**
    * Fetch all orders from YDB (scoped to active account)
    */
   async getOrders(): Promise<ShiftOrder[]> {
@@ -940,6 +955,7 @@ blockWhileRunning('generateWaybillsForSlot', 'Формируем накладн�
 blockWhileRunning('updateWaybillDispatch', 'Сохраняем отгрузку…');
 blockWhileRunning('updateDriverWaybillStatus', 'Обновляем статус рейса…');
 blockWhileRunning('confirmDelivery', 'Подтверждаем доставку…');
+blockWhileRunning('deleteDraftOrder', 'Удаляем черновик…');
 blockWhileRunning('receiveWaybill', 'Фиксируем приёмку поставки…');
 blockWhileRunning('updateMyDriverStatus', 'Обновляем статус смены…');
 blockWhileRunning('createTenantAccount', 'Сохраняем аккаунт…');

@@ -6,3 +6,10 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Секреты: ключи сервисных аккаунтов и приватные ключи никогда не коммитим.
+# Они задаются только переменными окружения (YDB_SERVICE_ACCOUNT_KEY в панели хостинга / локальном .env).
+authorized_key.json
+*authorized_key*.json
+*.pem
+*.key

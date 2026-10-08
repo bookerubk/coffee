@@ -299,6 +299,12 @@ export const StorageManager = {
     setStoredItem(STORAGE_KEYS.ORDERS, orders);
   },
 
+  /** Убирает заявку из кэша (после удаления черновика на сервере). */
+  removeOrder(orderId: string): void {
+    const orders = getStoredItem<ShiftOrder[]>(STORAGE_KEYS.ORDERS, []).filter((o) => o.id !== orderId);
+    setStoredItem(STORAGE_KEYS.ORDERS, orders);
+  },
+
   /**
    * Заменяет кэш заказов активного аккаунта списком с сервера. Раньше записи только добавлялись,
    * и удалённые на сервере (или демо-записи) оставались на экране навсегда.
